@@ -1,0 +1,11 @@
+# FloraRoute - Dependencias del Proyecto
+
+# Framework de Interfaz Web
+streamlit==1.29.0
+
+# Visualización de Mapas
+folium==0.14.0
+streamlit-folium==0.16.0
+
+# Análisis y Manipulación de Datos
+pandas==2.1.3
