@@ -201,14 +201,13 @@ class CalculadorRutas:
         
         return mejor_dist_total, secuencia
     
-    def calcular_ruta_tsp(self, origen: int, destinos: List[int], usar_heuristica: bool = False, retornar_origen: bool = True) -> Tuple[float, List[int]]:
+    def calcular_ruta_tsp(self, origen: int, destinos: List[int], retornar_origen: bool = True) -> Tuple[float, List[int]]:
         """
         Calcula ruta TSP optima eligiendo algoritmo segun numero de destinos
         
         Args:
             origen: Nodo de inicio
             destinos: Lista de nodos a visitar
-            usar_heuristica: Si True, usa heuristica para n > 15
             retornar_origen: Si True, retorna al origen (ciclo cerrado TSP)
             
         Returns:

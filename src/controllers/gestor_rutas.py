@@ -204,12 +204,11 @@ class GestorRutas:
         
         return True, None
     
-    def calcular_ruta_optima(self, usar_heuristica: bool = False, retornar_origen: bool = True) -> Tuple[bool, Optional[str]]:
+    def calcular_ruta_optima(self, retornar_origen: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Calcula la ruta optima para el pedido actual (RF-03)
         
         Args:
-            usar_heuristica: Si True, usa heuristica para n > 15
             retornar_origen: Si True, la ruta retorna al punto de origen (ciclo cerrado)
             
         Returns:
@@ -234,7 +233,6 @@ class GestorRutas:
         distancia_total, secuencia = self.calculador.calcular_ruta_tsp(
             origen_nodo,
             destinos_nodos,
-            usar_heuristica,
             retornar_origen
         )
         tiempo_fin = time.time()

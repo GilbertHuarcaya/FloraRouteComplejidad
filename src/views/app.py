@@ -20,8 +20,6 @@ from src.utils.cargador_datos import (
     obtener_factor_trafico_actual,
     encontrar_nodo_cercano
 )
-from src.utils.exportador import ExportadorResultados
-
 
 st.set_page_config(
     page_title="FloraRoute - Rutas de Entrega",
@@ -256,11 +254,6 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
     st.sidebar.subheader("3. Calcular Ruta Optima")
     
     if st.session_state.vivero_seleccionado and st.session_state.destinos:
-        usar_heuristica = st.sidebar.checkbox(
-            "Usar heuristica para n > 15",
-            value=False,
-            help="Mas rapido pero puede no ser optimo"
-        )
         
         retornar_origen = st.sidebar.checkbox(
             "Retornar al origen (ciclo cerrado)",
@@ -270,7 +263,7 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         
         if st.sidebar.button("Calcular Ruta", key="btn_calcular"):
             with st.spinner("Calculando ruta optima..."):
-                exito, error = gestor.calcular_ruta_optima(usar_heuristica, retornar_origen)
+                exito, error = gestor.calcular_ruta_optima(retornar_origen)
                 
                 if exito:
                     st.session_state.ruta_calculada = True
