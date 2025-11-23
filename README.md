@@ -241,9 +241,8 @@ En la barra lateral, seleccionar el vivero desde el cual partirán las entregas 
 
 ## Autores
 
-u20231941
-Choquehuanca Núñez Luciana Carolina 
-u202322187
-Huarcaya Matias Gilbert Alonso
-u202317362
-Santiago Peña Andreow Jomark
+- u20231941 Choquehuanca Núñez Luciana Carolina 
+
+- u202322187 Huarcaya Matias Gilbert Alonso
+
+- u202317362 Santiago Peña Andreow Jomark
