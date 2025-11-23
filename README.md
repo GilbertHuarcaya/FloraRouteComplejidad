@@ -133,7 +133,69 @@ def dijkstra(self, origen: int, destino: int) -> Tuple[float, List[int]]:
 - Backtracking para obtener el camino
 - Complejidad: O((V + E) log V)
 
-### 3. Integración de Algoritmos
+### 3. Factor de Congestión de Tráfico
+
+**Ubicación:** `src/utils/cargador_datos.py` - Líneas 84-105
+
+**Propósito:** Modelar variaciones de tráfico según la hora del día para calcular tiempos realistas de tránsito.
+
+**Fórmula:**
+
+```
+W_ij(t) = (dist_ij / vel_ij) × Factor_congestión(t)
+```
+
+Donde:
+- `W_ij(t)`: Peso de la arista (i,j) en el tiempo t (tiempo de viaje)
+- `dist_ij`: Distancia geográfica entre nodos
+- `vel_ij`: Velocidad base del segmento vial
+- `Factor_congestión(t)`: Multiplicador basado en hora actual
+
+**Implementación:**
+
+```python
+# Definición de factores por hora (cargador_datos.py líneas 84-99)
+def cargar_factor_trafico() -> Dict[int, float]:
+    """
+    Retorna factores de trafico por hora del dia
+    Factor 1.0 = trafico normal
+    Factor > 1.0 = trafico congestionado (aumenta tiempo de viaje)
+    """
+    factores = {
+        0: 1.0,   # 00:00 - Madrugada
+        5: 1.2,   # 05:00 - Inicio actividad
+        8: 2.5,   # 08:00 - Hora punta mañana
+        12: 1.5,  # 12:00 - Mediodía
+        18: 2.5,  # 18:00 - Hora punta tarde
+        21: 1.3,  # 21:00 - Noche
+        23: 1.0   # 23:00 - Final del día
+    }
+    return factores
+
+def obtener_factor_trafico_actual() -> float:
+    """Obtiene el factor de trafico para la hora actual"""
+    hora_actual = datetime.now().hour
+    factores = cargar_factor_trafico()
+    # Interpolación para horas sin definición exacta
+    return factores.get(hora_actual, 1.0)
+```
+
+**Aplicación en Dijkstra:**
+
+```python
+# Línea 79 de calculador_rutas.py
+for vecino, peso in self.grafo.get(actual, {}).items():
+    peso_con_trafico = peso * self.factor_trafico  # Aplicación del factor
+    nueva_dist = distancias[actual] + peso_con_trafico
+```
+
+**Características:**
+- Factores dinámicos: 1.0x (normal) a 2.5x (hora punta)
+- Horas punta identificadas: 8:00 AM y 6:00 PM (factor 2.5x)
+- Actualización en tiempo real según hora del sistema
+- Integración transparente con algoritmo Dijkstra
+
+### 4. Integración de Algoritmos
 
 **Flujo completo:**
 
