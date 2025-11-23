@@ -19,8 +19,8 @@ def cargar_grafo_lima() -> Tuple[Dict[int, Dict[int, float]], Dict[int, Tuple[fl
         - grafo_dict: {nodo: {vecino: distancia}}
         - nodos_coords: {nodo_id: (lat, lon)}
     """
-    ruta_nodos = 'docs/lima_nodes.csv'
-    ruta_aristas = 'docs/lima_edges.csv'
+    ruta_nodos = 'dataset/lima_nodes.csv'
+    ruta_aristas = 'dataset/lima_edges.csv'
     
     if not os.path.exists(ruta_nodos):
         raise FileNotFoundError(f"No encontrado: {ruta_nodos}")
