@@ -1,7 +1,12 @@
 """
 Modulo: calculador_rutas.py
 Descripcion: Algoritmos de optimizacion de rutas para TSP (Traveling Salesman Problem)
-Implementa: Held-Karp (TSP exacto), Floyd-Warshall, Bellman-Ford
+
+TÉCNICAS IMPLEMENTADAS DEL CURSO:
+✅ 1. PROGRAMACIÓN DINÁMICA (Held-Karp) - Líneas 106-202
+✅ 2. TÉCNICAS DE RECORRIDO Y BÚSQUEDA EN GRAFOS (Dijkstra) - Líneas 29-87
+
+Implementa: Held-Karp (TSP exacto con DP), Dijkstra (Búsqueda en Grafos)
 """
 
 import heapq
@@ -28,7 +33,15 @@ class CalculadorRutas:
     
     def dijkstra(self, origen: int, destino: int) -> Tuple[float, List[int]]:
         """
+         TÉCNICA: RECORRIDO Y BÚSQUEDA EN GRAFOS 
+        
         Calcula camino mas corto entre dos nodos usando Dijkstra
+        
+        Componentes de Búsqueda en Grafos:
+        - Cola de prioridad para exploración eficiente
+        - Set de visitados para evitar ciclos
+        - Relajación de aristas para optimizar distancias
+        - Reconstrucción de camino mediante punteros
         
         Args:
             origen: Nodo inicial
@@ -46,39 +59,43 @@ class CalculadorRutas:
         visitados = set()
         heap: List[Tuple[float, int]] = [(0.0, origen)]
         
+        # ========== BÚSQUEDA EN GRAFOS: EXPLORACIÓN DE NODOS ==========
         while heap:
-            dist_actual, actual = heapq.heappop(heap)
+            dist_actual, actual = heapq.heappop(heap)  # Extrae nodo con menor distancia
             
             if actual in visitados:
                 continue
             
-            visitados.add(actual)
+            visitados.add(actual)  #Marca nodo como visitado
             
             if actual == destino:
-                break
+                break  # Terminación anticipada al encontrar destino
             
             if dist_actual > distancias[actual]:
                 continue
             
+            #EXPLORACIÓN: Recorre vecinos del nodo actual
             for vecino, peso in self.grafo.get(actual, {}).items():
                 # Aplicar factor de trafico al peso
                 peso_con_trafico = peso * self.factor_trafico
                 nueva_dist = distancias[actual] + peso_con_trafico
                 
+                #RELAJACIÓN DE ARISTAS: Actualiza si se encuentra camino mejor
                 if nueva_dist < distancias[vecino]:
                     distancias[vecino] = nueva_dist
                     padres[vecino] = actual
-                    heapq.heappush(heap, (nueva_dist, vecino))
+                    heapq.heappush(heap, (nueva_dist, vecino))  # Agrega a cola de prioridad
         
-        # Reconstruir camino
+        # ========== RECONSTRUCCIÓN DE CAMINO ==========
         if distancias[destino] == float('inf'):
             return float('inf'), []
         
+        #BACKTRACKING: Reconstruye camino desde destino hasta origen
         camino = []
         actual = destino
         while actual is not None:
             camino.append(actual)
-            actual = padres.get(actual)
+            actual = padres.get(actual)  # Sigue punteros hacia atrás
         camino.reverse()
         
         return distancias[destino], camino
@@ -105,8 +122,16 @@ class CalculadorRutas:
     
     def held_karp(self, origen: int, destinos: List[int], retornar_origen: bool = True) -> Tuple[float, List[int]]:
         """
+         TÉCNICA: PROGRAMACIÓN DINÁMICA 
+        
         Algoritmo Held-Karp para TSP exacto usando programacion dinamica
-        Complejidad: O(n^2 * 2^n)
+        
+        Características de Programación Dinámica:
+        1. SUBESTRUCTURA ÓPTIMA: La mejor ruta a un conjunto incluye la mejor ruta a subconjuntos menores
+        2. MEMORIZACIÓN: Almacena soluciones parciales en tabla dp para evitar recálculos
+        3. RECONSTRUCCIÓN: Usa backtracking para obtener la secuencia óptima
+        
+        Complejidad: O(n^2 * 2^n) - Estados: (subconjunto, último_nodo)
         Factible para n <= 20
         
         Args:
@@ -128,33 +153,41 @@ class CalculadorRutas:
         n = len(destinos)
         destinos_set = set(destinos)
         
-        # dp[subconjunto][ultimo_nodo] = (distancia_minima, nodo_previo)
+        # ========== PROGRAMACIÓN DINÁMICA: TABLA DE MEMORIZACIÓN ==========
+        # Estado: dp[subconjunto][ultimo_nodo] = (distancia_minima, nodo_previo)
+        # - subconjunto: frozenset de destinos visitados (permite usar como clave)
+        # - ultimo_nodo: último destino visitado en el subconjunto
+        # - distancia_minima: menor distancia para llegar a ese estado
+        # - nodo_previo: nodo previo en la ruta óptima (para reconstrucción)
         dp = {}
         
-        # Caso base: ir desde origen a cada destino
+        #CASO BASE: Ir desde origen a cada destino individualmente
         for i, destino in enumerate(destinos):
             subconjunto = frozenset([destino])
             dist = self.matriz_distancias.get((origen, destino), float('inf'))
-            dp[(subconjunto, destino)] = (dist, origen)
+            dp[(subconjunto, destino)] = (dist, origen)  # Memoriza caso base
         
-        # Iterar sobre tamanos de subconjuntos de 2 a n
+        # ========== CONSTRUCCIÓN DE TABLA DP: SUBESTRUCTURA ÓPTIMA ==========
+        # Itera sobre tamaños de subconjuntos crecientes (bottom-up)
         for tamano in range(2, n + 1):
             for subconjunto_tuple in combinations(destinos, tamano):
                 subconjunto = frozenset(subconjunto_tuple)
                 
-                # Para cada nodo como ultimo en el subconjunto
+                # Para cada posible último nodo en el subconjunto
                 for ultimo in subconjunto:
-                    subconjunto_prev = subconjunto - {ultimo}
+                    subconjunto_prev = subconjunto - {ultimo}  # Subconjunto sin último nodo
                     
                     mejor_dist = float('inf')
                     mejor_prev = None
                     
-                    # Probar cada nodo del subconjunto previo como penultimo
+                    #SUBESTRUCTURA ÓPTIMA: Prueba todos los posibles penúltimos nodos
+                    # La mejor ruta a 'ultimo' viene de la mejor ruta a algún 'penultimo'
                     for penultimo in subconjunto_prev:
                         if (subconjunto_prev, penultimo) not in dp:
                             continue
                         
-                        dist_prev, _ = dp[(subconjunto_prev, penultimo)]
+                        #REUTILIZA solución del subproblema menor
+                        dist_prev, _ = dp[(subconjunto_prev, penultimo)]  # Consulta tabla DP
                         dist_actual = self.matriz_distancias.get((penultimo, ultimo), float('inf'))
                         dist_total = dist_prev + dist_actual
                         
@@ -162,6 +195,7 @@ class CalculadorRutas:
                             mejor_dist = dist_total
                             mejor_prev = penultimo
                     
+                    #MEMORIZACIÓN: Almacena resultado del subproblema
                     dp[(subconjunto, ultimo)] = (mejor_dist, mejor_prev)
         
         # Encontrar solucion optima
@@ -179,19 +213,21 @@ class CalculadorRutas:
         if mejor_ultimo is None:
             return float('inf'), [origen]
         
-        # Reconstruir secuencia
+        # ========== RECONSTRUCCIÓN DE SOLUCIÓN: BACKTRACKING EN DP ==========
+        #BACKTRACKING: Reconstruye la secuencia óptima desde la tabla DP
         secuencia = [mejor_ultimo]
         subconjunto_actual = todos_destinos
         nodo_actual = mejor_ultimo
         
+        # Sigue los punteros 'nodo_previo' almacenados en la tabla DP
         while len(subconjunto_actual) > 1:
-            _, prev = dp[(subconjunto_actual, nodo_actual)]
+            _, prev = dp[(subconjunto_actual, nodo_actual)]  # Consulta nodo previo óptimo
             secuencia.append(prev)
-            subconjunto_actual = subconjunto_actual - {nodo_actual}
+            subconjunto_actual = subconjunto_actual - {nodo_actual}  # Reduce subconjunto
             nodo_actual = prev
         
-        secuencia.reverse()
-        secuencia.insert(0, origen)
+        secuencia.reverse()  # Invierte para tener orden correcto
+        secuencia.insert(0, origen)  # Agrega origen al inicio
         
         # Si se solicita retornar al origen, agregar al final
         if retornar_origen:
