@@ -107,7 +107,6 @@ def dijkstra(self, origen: int, destino: int) -> Tuple[float, List[int]]:
         if actual == destino:
             break
         
-        # Relajación de aristas
         for vecino, peso in self.grafo.get(actual, {}).items():
             peso_con_trafico = peso * self.factor_trafico
             nueva_dist = distancias[actual] + peso_con_trafico
@@ -131,7 +130,6 @@ def dijkstra(self, origen: int, destino: int) -> Tuple[float, List[int]]:
 **Características:**
 - Exploración con cola de prioridad (heap)
 - Marcado de nodos visitados
-- Relajación de aristas
 - Backtracking para obtener el camino
 - Complejidad: O((V + E) log V)
 

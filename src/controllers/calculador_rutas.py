@@ -40,7 +40,6 @@ class CalculadorRutas:
         Componentes de Búsqueda en Grafos:
         - Cola de prioridad para exploración eficiente
         - Set de visitados para evitar ciclos
-        - Relajación de aristas para optimizar distancias
         - Reconstrucción de camino mediante punteros
         
         Args:
@@ -59,7 +58,7 @@ class CalculadorRutas:
         visitados = set()
         heap: List[Tuple[float, int]] = [(0.0, origen)]
         
-        # ========== BÚSQUEDA EN GRAFOS: EXPLORACIÓN DE NODOS ==========
+        #  BÚSQUEDA EN GRAFOS: EXPLORACIÓN DE NODOS 
         while heap:
             dist_actual, actual = heapq.heappop(heap)  # Extrae nodo con menor distancia
             
@@ -80,13 +79,13 @@ class CalculadorRutas:
                 peso_con_trafico = peso * self.factor_trafico
                 nueva_dist = distancias[actual] + peso_con_trafico
                 
-                #RELAJACIÓN DE ARISTAS: Actualiza si se encuentra camino mejor
+                #Actualiza si se encuentra camino mejor
                 if nueva_dist < distancias[vecino]:
                     distancias[vecino] = nueva_dist
                     padres[vecino] = actual
                     heapq.heappush(heap, (nueva_dist, vecino))  # Agrega a cola de prioridad
         
-        # ========== RECONSTRUCCIÓN DE CAMINO ==========
+        #  RECONSTRUCCIÓN DE CAMINO 
         if distancias[destino] == float('inf'):
             return float('inf'), []
         
@@ -153,7 +152,7 @@ class CalculadorRutas:
         n = len(destinos)
         destinos_set = set(destinos)
         
-        # ========== PROGRAMACIÓN DINÁMICA: TABLA DE MEMORIZACIÓN ==========
+        #  PROGRAMACIÓN DINÁMICA: TABLA DE MEMORIZACIÓN 
         # Estado: dp[subconjunto][ultimo_nodo] = (distancia_minima, nodo_previo)
         # - subconjunto: frozenset de destinos visitados (permite usar como clave)
         # - ultimo_nodo: último destino visitado en el subconjunto
@@ -167,7 +166,7 @@ class CalculadorRutas:
             dist = self.matriz_distancias.get((origen, destino), float('inf'))
             dp[(subconjunto, destino)] = (dist, origen)  # Memoriza caso base
         
-        # ========== CONSTRUCCIÓN DE TABLA DP: SUBESTRUCTURA ÓPTIMA ==========
+        #  CONSTRUCCIÓN DE TABLA DP: SUBESTRUCTURA ÓPTIMA 
         # Itera sobre tamaños de subconjuntos crecientes (bottom-up)
         for tamano in range(2, n + 1):
             for subconjunto_tuple in combinations(destinos, tamano):
@@ -213,7 +212,7 @@ class CalculadorRutas:
         if mejor_ultimo is None:
             return float('inf'), [origen]
         
-        # ========== RECONSTRUCCIÓN DE SOLUCIÓN: BACKTRACKING EN DP ==========
+        #  RECONSTRUCCIÓN DE SOLUCIÓN: BACKTRACKING EN DP 
         #BACKTRACKING: Reconstruye la secuencia óptima desde la tabla DP
         secuencia = [mejor_ultimo]
         subconjunto_actual = todos_destinos
