@@ -151,97 +151,116 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
     
     st.sidebar.header("Control de Rutas")
     st.sidebar.subheader("1. Seleccionar Vivero Origen")
+    # Nota: no escribir keys de widgets en session_state aquí.
+    # El formulario de crear vivero leerá `st.session_state.get('mapa_clicked')`
+    # localmente para poblar valores por defecto (igual que en agregar destino).
     
     # Seccion 1.5: Gestion de viveros - crear nuevo vivero y persistir
     with st.sidebar.expander("Crear nuevo vivero"):
-        nombre_new = st.text_input("Nombre del vivero", value="", key="nombre_new")
-        lat_new = st.number_input("Latitud", min_value=-90.0, max_value=90.0, format="%.8f", value=-12.0464, key="lat_new")
-        lon_new = st.number_input("Longitud", min_value=-180.0, max_value=180.0, format="%.8f", value=-77.0428, key="lon_new")
-        capacidad_new = st.number_input("Capacidad de entrega", min_value=1, max_value=1000, value=20, key="capacidad_new")
-        stock_rosas_new = st.number_input("Stock Rosas", min_value=0, max_value=100000, value=100, key="stock_rosas_new")
-        stock_claveles_new = st.number_input("Stock Claveles", min_value=0, max_value=100000, value=50, key="stock_claveles_new")
-        stock_lirios_new = st.number_input("Stock Lirios", min_value=0, max_value=100000, value=30, key="stock_lirios_new")
-        horario_inicio_new = st.text_input("Horario inicio (HH:MM)", value="08:00", key="horario_inicio_new")
-        horario_fin_new = st.text_input("Horario fin (HH:MM)", value="18:00", key="horario_fin_new")
-        if st.button("Guardar vivero", key="btn_guardar_vivero"):
-            # Persistir en CSV y registrar en gestor
-            try:
-                # Rutas relativas
-                csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'viveros.csv'))
-                df_exist = pd.read_csv(csv_path)
-                # calcular nuevo id
-                if 'vivero_id' in df_exist.columns and not df_exist.empty:
-                    nuevo_id = int(df_exist['vivero_id'].max()) + 1
-                else:
-                    nuevo_id = 1
+        # Seguir la misma logica que "Agregar Destino": usar st.session_state.mapa_clicked
+        # para poblar los valores por defecto y NO modificar keys de widgets despues de
+        # que hayan sido instanciadas.
+        with st.form("form_crear_vivero"):
+            st.write("Crear nuevo vivero:")
 
-                nuevo_reg = {
-                    'vivero_id': nuevo_id,
-                    'nombre': nombre_new,
-                    'nodo_id': '',
-                    'lat': float(lat_new),
-                    'lon': float(lon_new),
-                    'stock_rosas': int(stock_rosas_new),
-                    'stock_claveles': int(stock_claveles_new),
-                    'stock_lirios': int(stock_lirios_new),
-                    'stock_girasoles': 0,
-                    'stock_tulipanes': 0,
-                    'capacidad_entrega': int(capacidad_new),
-                    'horario_inicio': horario_inicio_new,
-                    'horario_fin': horario_fin_new
-                }
-                # Append and save (pd.append deprecated)
-                df_exist = pd.concat([df_exist, pd.DataFrame([nuevo_reg])], ignore_index=True)
-                df_exist.to_csv(csv_path, index=False)
+            # Usar coordenadas del click si existen, sino valores por defecto
+            if st.session_state.get('mapa_clicked'):
+                default_lat = max(-12.3, min(-11.7, st.session_state['mapa_clicked']['lat']))
+                default_lon = max(-77.2, min(-76.8, st.session_state['mapa_clicked']['lon']))
+                st.info("Usando coordenadas del mapa para el nuevo vivero")
+            else:
+                default_lat = -12.0464
+                default_lon = -77.0428
 
-                # registrar en gestor con nodo asociado
+            crear_nombre = st.text_input("Nombre del vivero", value="", key="crear_nombre")
+            crear_lat = st.number_input("Latitud", min_value=-12.3, max_value=-11.7, value=float(default_lat), format="%.6f", key="crear_lat")
+            crear_lon = st.number_input("Longitud", min_value=-77.2, max_value=-76.8, value=float(default_lon), format="%.6f", key="crear_lon")
+            crear_capacidad = st.number_input("Capacidad de entrega", min_value=1, max_value=1000, value=20, key="crear_capacidad")
+            crear_stock_rosas = st.number_input("Stock Rosas", min_value=0, max_value=100000, value=100, key="crear_stock_rosas")
+            crear_stock_claveles = st.number_input("Stock Claveles", min_value=0, max_value=100000, value=50, key="crear_stock_claveles")
+            crear_stock_lirios = st.number_input("Stock Lirios", min_value=0, max_value=100000, value=30, key="crear_stock_lirios")
+            crear_horario_inicio = st.text_input("Horario inicio (HH:MM)", value="08:00", key="crear_horario_inicio")
+            crear_horario_fin = st.text_input("Horario fin (HH:MM)", value="18:00", key="crear_horario_fin")
+
+            submitted = st.form_submit_button("Guardar vivero")
+            if submitted:
                 try:
-                    nodo_asoc = encontrar_nodo_cercano(float(lat_new), float(lon_new), nodos_coords)
-                except Exception:
-                    nodo_asoc = -1
+                    csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'viveros.csv'))
+                    df_exist = pd.read_csv(csv_path)
+                    if 'vivero_id' in df_exist.columns and not df_exist.empty:
+                        nuevo_id = int(df_exist['vivero_id'].max()) + 1
+                    else:
+                        nuevo_id = 1
 
-                inventario_new = Inventario({
-                    'rosas': int(stock_rosas_new),
-                    'claveles': int(stock_claveles_new),
-                    'lirios': int(stock_lirios_new),
-                    'girasoles': 0,
-                    'tulipanes': 0
-                })
+                    nuevo_reg = {
+                        'vivero_id': nuevo_id,
+                        'nombre': crear_nombre,
+                        'nodo_id': '',
+                        'lat': float(crear_lat),
+                        'lon': float(crear_lon),
+                        'stock_rosas': int(crear_stock_rosas),
+                        'stock_claveles': int(crear_stock_claveles),
+                        'stock_lirios': int(crear_stock_lirios),
+                        'stock_girasoles': 0,
+                        'stock_tulipanes': 0,
+                        'capacidad_entrega': int(crear_capacidad),
+                        'horario_inicio': crear_horario_inicio,
+                        'horario_fin': crear_horario_fin
+                    }
+                    df_exist = pd.concat([df_exist, pd.DataFrame([nuevo_reg])], ignore_index=True)
+                    df_exist.to_csv(csv_path, index=False)
 
-                vivero_obj = Vivero(
-                    vivero_id=int(nuevo_id),
-                    nombre=nombre_new,
-                    nodo_id=int(nodo_asoc) if nodo_asoc is not None else -1,
-                    lat=float(lat_new),
-                    lon=float(lon_new),
-                    inventario=inventario_new,
-                    capacidad_entrega=int(capacidad_new),
-                    horario_inicio=horario_inicio_new,
-                    horario_fin=horario_fin_new
-                )
+                    # registrar en gestor con nodo asociado
+                    try:
+                        nodo_asoc = encontrar_nodo_cercano(float(crear_lat), float(crear_lon), nodos_coords)
+                    except Exception:
+                        nodo_asoc = -1
 
-                gestor.registrar_vivero(vivero_obj)
+                    inventario_new = Inventario({
+                        'rosas': int(crear_stock_rosas),
+                        'claveles': int(crear_stock_claveles),
+                        'lirios': int(crear_stock_lirios),
+                        'girasoles': 0,
+                        'tulipanes': 0
+                    })
 
-                # Actualizar session_state para que aparezca en multiselect y en mapa
-                display_new = f"{nombre_new} (ID: {nuevo_id})"
-                ms = list(st.session_state.get('multiselect_viveros', []))
-                if display_new not in ms:
-                    ms.append(display_new)
-                # set the session state BEFORE the multiselect widget is created
-                st.session_state['multiselect_viveros'] = ms
-                st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(nuevo_id)]))
-                # Actualizar viveros_df en session_state para que aparezca inmediatamente
-                try:
-                    existing_df = st.session_state.get('viveros_df')
-                    if existing_df is not None:
-                        st.session_state['viveros_df'] = pd.concat([existing_df, pd.DataFrame([nuevo_reg])], ignore_index=True)
-                except Exception:
-                    pass
+                    vivero_obj = Vivero(
+                        vivero_id=int(nuevo_id),
+                        nombre=crear_nombre,
+                        nodo_id=int(nodo_asoc) if nodo_asoc is not None else -1,
+                        lat=float(crear_lat),
+                        lon=float(crear_lon),
+                        inventario=inventario_new,
+                        capacidad_entrega=int(crear_capacidad),
+                        horario_inicio=crear_horario_inicio,
+                        horario_fin=crear_horario_fin
+                    )
 
-                st.success("Vivero guardado y registrado correctamente")
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"Error guardando vivero: {e}")
+                    gestor.registrar_vivero(vivero_obj)
+
+                    # Actualizar session_state (viveros_df y multiselect) antes de rerun
+                    display_new = f"{crear_nombre} (ID: {nuevo_id})"
+                    ms = list(st.session_state.get('multiselect_viveros', []))
+                    if display_new not in ms:
+                        ms.append(display_new)
+                    st.session_state['multiselect_viveros'] = ms
+                    st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(nuevo_id)]))
+
+                    try:
+                        existing_df = st.session_state.get('viveros_df')
+                        if existing_df is not None:
+                            st.session_state['viveros_df'] = pd.concat([existing_df, pd.DataFrame([nuevo_reg])], ignore_index=True)
+                    except Exception:
+                        pass
+
+                    # eliminar mapa_clicked para que el form no se rellene con la misma coordenada
+                    if 'mapa_clicked' in st.session_state:
+                        st.session_state.pop('mapa_clicked')
+
+                    st.success("Vivero guardado y registrado correctamente")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error guardando vivero: {e}")
 
     if not viveros_df.empty:
         # Mostrar multiselect para elegir varios viveros como posibles puntos de partida
@@ -551,10 +570,13 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                 lat_clicked = clicked.get("lat")
                 lon_clicked = clicked.get("lng")
                 if lat_clicked and lon_clicked:
-                    st.session_state.mapa_clicked = {
-                        'lat': lat_clicked,
-                        'lon': lon_clicked
-                    }
+                    new_mapa = {'lat': lat_clicked, 'lon': lon_clicked}
+                    # solo actualizar y rerun si cambió
+                    if st.session_state.get('mapa_clicked') != new_mapa:
+                        st.session_state.mapa_clicked = new_mapa
+                        # Propagar click para rellenar formulario de nuevo vivero
+                        # llamamos rerun para que la barra lateral sea reconstruida usando estos valores
+                        st.rerun()
 
         # Si se hizo click sobre un objeto (p. ej. un marcador), intentar reconocer vivero
         if mapa_output.get("last_object_clicked"):
@@ -600,22 +622,44 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                         break
 
                 if encontrado:
-                    # actualizar multiselect y origen activo
-                    current = list(st.session_state.multiselect_viveros) or []
+                    # actualizar multiselect y origen activo solo si hay cambios
+                    current = list(st.session_state.get('multiselect_viveros', [])) or []
+                    need_rerun = False
                     if display not in current:
                         current.append(display)
-                    st.session_state.multiselect_viveros = current
+                        st.session_state.multiselect_viveros = current
+                        need_rerun = True
+
                     # reconstruir mapping local para ids
                     opciones_viveros_local = {f"{row['nombre']} (ID: {int(row['vivero_id'])})": int(row['vivero_id']) for _, row in viveros_df.iterrows()}
-                    st.session_state.viveros_seleccionados_ids = [opciones_viveros_local[d] for d in current if d in opciones_viveros_local]
-                    st.session_state.vivero_origen_activo = encontrado
-                    st.session_state.vivero_seleccionado = encontrado
-                    # aplicar al gestor
+                    nuevos_ids = [opciones_viveros_local[d] for d in current if d in opciones_viveros_local]
+                    if st.session_state.get('viveros_seleccionados_ids') != nuevos_ids:
+                        st.session_state.viveros_seleccionados_ids = nuevos_ids
+                        need_rerun = True
+
+                    if st.session_state.get('vivero_origen_activo') != encontrado:
+                        st.session_state.vivero_origen_activo = encontrado
+                        need_rerun = True
+
+                    if st.session_state.get('vivero_seleccionado') != encontrado:
+                        st.session_state.vivero_seleccionado = encontrado
+                        need_rerun = True
+
+                    # no escribir keys de widgets; en su lugar almacenar mapa_clicked
+                    try:
+                        st.session_state['mapa_clicked'] = {'lat': float(v['lat']), 'lon': float(v['lon'])}
+                        need_rerun = True
+                    except Exception:
+                        pass
+
+                    # aplicar al gestor (no afecta rerun guard)
                     try:
                         gestor.seleccionar_vivero(encontrado)
                     except Exception:
                         pass
-                    st.experimental_rerun()
+
+                    if need_rerun:
+                        st.rerun()
 
 
 def mostrar_resumen_metricas(gestor):
