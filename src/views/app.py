@@ -74,6 +74,15 @@ def inicializar_estado():
     """Inicializa el estado de la sesion"""
     if 'vivero_seleccionado' not in st.session_state:
         st.session_state.vivero_seleccionado = None
+    # soportar seleccion multiple de viveros (display strings en el multiselect)
+    if 'multiselect_viveros' not in st.session_state:
+        st.session_state.multiselect_viveros = []
+    # ids de viveros seleccionados (para uso interno)
+    if 'viveros_seleccionados_ids' not in st.session_state:
+        st.session_state.viveros_seleccionados_ids = []
+    # origen activo (id)
+    if 'vivero_origen_activo' not in st.session_state:
+        st.session_state.vivero_origen_activo = None
     if 'destinos' not in st.session_state:
         st.session_state.destinos = []
     if 'contador_destinos' not in st.session_state:
@@ -131,22 +140,47 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
     st.sidebar.subheader("1. Seleccionar Vivero Origen")
     
     if not viveros_df.empty:
-        opciones_viveros = {f"{row['nombre']} (ID: {row['vivero_id']})": row['vivero_id'] for _, row in viveros_df.iterrows()}
-        vivero_seleccionado_str = st.sidebar.selectbox(
-            "Vivero de origen:",
-            options=list(opciones_viveros.keys()),
-            key="select_vivero"
+        # Mostrar multiselect para elegir varios viveros como posibles puntos de partida
+        opciones_viveros = {f"{row['nombre']} (ID: {row['vivero_id']})": int(row['vivero_id']) for _, row in viveros_df.iterrows()}
+        opciones_display = list(opciones_viveros.keys())
+
+        seleccion_display = st.sidebar.multiselect(
+            "Viveros de origen (puede seleccionar varios):",
+            options=opciones_display,
+            default=st.session_state.multiselect_viveros,
+            key="multiselect_viveros"
         )
-        
-        if st.sidebar.button("Confirmar Vivero", key="btn_confirmar_vivero"):
-            vivero_id = opciones_viveros[vivero_seleccionado_str]
-            exito, error = gestor.seleccionar_vivero(vivero_id)
-            
-            if exito:
-                st.session_state.vivero_seleccionado = vivero_id
-                st.sidebar.success(f"Vivero seleccionado: {vivero_seleccionado_str}")
-            else:
-                st.sidebar.error(f"Error: {error}")
+
+        # Actualizar ids seleccionados en session_state
+        st.session_state.viveros_seleccionados_ids = [opciones_viveros[d] for d in seleccion_display]
+
+        # Selectbox para elegir cuál de los seleccionados será el origen activo
+        if seleccion_display:
+            origen_display_default = None
+            # buscar display por id si ya hay origen activo
+            if st.session_state.vivero_origen_activo:
+                for d, vid in opciones_viveros.items():
+                    if vid == st.session_state.vivero_origen_activo:
+                        origen_display_default = d
+                        break
+
+            origen_display = st.sidebar.selectbox(
+                "Iniciar desde (origen activo):",
+                options=seleccion_display,
+                index=(seleccion_display.index(origen_display_default) if origen_display_default in seleccion_display else 0)
+            )
+
+            if st.sidebar.button("Confirmar origen activo", key="btn_confirmar_vivero"):
+                vivero_id = opciones_viveros[origen_display]
+                exito, error = gestor.seleccionar_vivero(vivero_id)
+                if exito:
+                    st.session_state.vivero_seleccionado = vivero_id
+                    st.session_state.vivero_origen_activo = vivero_id
+                    st.sidebar.success(f"Origen activo: {origen_display}")
+                else:
+                    st.sidebar.error(f"Error: {error}")
+        else:
+            st.sidebar.info("Selecciona al menos un vivero para definir un origen activo")
     
     st.sidebar.divider()
     
@@ -287,17 +321,26 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
     # Agregar plugin de click
     mapa.add_child(folium.LatLngPopup())
     
-    # Agregar vivero seleccionado SIEMPRE
-    if st.session_state.vivero_seleccionado:
-        vivero_row = viveros_df[viveros_df['vivero_id'] == st.session_state.vivero_seleccionado]
-        if not vivero_row.empty:
-            vivero = vivero_row.iloc[0]
-            folium.Marker(
-                [vivero['lat'], vivero['lon']],
-                popup=f"<b>{vivero['nombre']}</b><br>Origen",
-                tooltip=vivero['nombre'],
-                icon=folium.Icon(color='green', icon='home', prefix='fa')
-            ).add_to(mapa)
+    # Agregar TODOS los viveros al mapa
+    for _, vivero in viveros_df.iterrows():
+        vid = int(vivero['vivero_id'])
+        display = f"{vivero['nombre']} (ID: {vid})"
+        is_selected = vid in st.session_state.viveros_seleccionados_ids
+        is_activo = (st.session_state.vivero_origen_activo == vid)
+        # Estilo segun estado
+        if is_activo:
+            icon = folium.Icon(color='darkgreen', icon='home', prefix='fa')
+        elif is_selected:
+            icon = folium.Icon(color='green', icon='home', prefix='fa')
+        else:
+            icon = folium.Icon(color='blue', icon='home', prefix='fa')
+
+        folium.Marker(
+            [float(vivero['lat']), float(vivero['lon'])],
+            popup=f"<b>{vivero['nombre']}</b><br>ID: {vid}",
+            tooltip=display,
+            icon=icon
+        ).add_to(mapa)
     
     # Agregar destinos SIEMPRE
     for i, dest in enumerate(st.session_state.destinos, 1):
@@ -381,19 +424,83 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                             ).add_to(mapa)
     
     # Mostrar mapa y capturar clicks
-    mapa_output = st_folium(mapa, width=1200, height=600, returned_objects=["last_clicked"])
+    # Devolver tambien el ultimo objeto clickeado para detectar clicks sobre marcadores
+    mapa_output = st_folium(mapa, width=1200, height=600, returned_objects=["last_clicked", "last_object_clicked"])
     
     # Guardar coordenadas del click en session_state
-    if mapa_output and mapa_output.get("last_clicked"):
-        clicked = mapa_output["last_clicked"]
-        if clicked:
-            lat_clicked = clicked.get("lat")
-            lon_clicked = clicked.get("lng")
-            if lat_clicked and lon_clicked:
-                st.session_state.mapa_clicked = {
-                    'lat': lat_clicked,
-                    'lon': lon_clicked
-                }
+    if mapa_output:
+        # click libre en el mapa (no sobre marcador)
+        if mapa_output.get("last_clicked"):
+            clicked = mapa_output["last_clicked"]
+            if clicked:
+                lat_clicked = clicked.get("lat")
+                lon_clicked = clicked.get("lng")
+                if lat_clicked and lon_clicked:
+                    st.session_state.mapa_clicked = {
+                        'lat': lat_clicked,
+                        'lon': lon_clicked
+                    }
+
+        # Si se hizo click sobre un objeto (p. ej. un marcador), intentar reconocer vivero
+        if mapa_output.get("last_object_clicked"):
+            obj = mapa_output.get("last_object_clicked")
+            # objetos de folium suelen traer propiedades con coordenadas, intentar extraer
+            lat_o = None
+            lon_o = None
+            if isinstance(obj, dict):
+                # estructuras varian; intentar varios caminos
+                geom = obj.get('geometry') or obj.get('latlng')
+                if geom and isinstance(geom, dict):
+                    lat_o = geom.get('lat') or geom.get('latitude')
+                    lon_o = geom.get('lng') or geom.get('longitude')
+                else:
+                    # a veces vienen como lista
+                    coords = obj.get('coordinates')
+                    if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                        lon_o, lat_o = coords[0], coords[1]
+
+            # fallback: usar last_clicked si last_object_clicked no trae coords
+            if (lat_o is None or lon_o is None) and mapa_output.get('last_clicked'):
+                clicked = mapa_output['last_clicked']
+                lat_o = clicked.get('lat')
+                lon_o = clicked.get('lng')
+
+            if lat_o and lon_o:
+                try:
+                    lat_o = float(lat_o)
+                    lon_o = float(lon_o)
+                except Exception:
+                    lat_o = None
+                    lon_o = None
+
+            # Buscar vivero cercano por coordenadas
+            if lat_o and lon_o:
+                # tolerancia en grados (~50-100 metros depende de latitud)
+                tolerancia = 0.0006
+                encontrado = None
+                for _, v in viveros_df.iterrows():
+                    if abs(float(v['lat']) - lat_o) <= tolerancia and abs(float(v['lon']) - lon_o) <= tolerancia:
+                        encontrado = int(v['vivero_id'])
+                        display = f"{v['nombre']} (ID: {encontrado})"
+                        break
+
+                if encontrado:
+                    # actualizar multiselect y origen activo
+                    current = list(st.session_state.multiselect_viveros) or []
+                    if display not in current:
+                        current.append(display)
+                    st.session_state.multiselect_viveros = current
+                    # reconstruir mapping local para ids
+                    opciones_viveros_local = {f"{row['nombre']} (ID: {int(row['vivero_id'])})": int(row['vivero_id']) for _, row in viveros_df.iterrows()}
+                    st.session_state.viveros_seleccionados_ids = [opciones_viveros_local[d] for d in current if d in opciones_viveros_local]
+                    st.session_state.vivero_origen_activo = encontrado
+                    st.session_state.vivero_seleccionado = encontrado
+                    # aplicar al gestor
+                    try:
+                        gestor.seleccionar_vivero(encontrado)
+                    except Exception:
+                        pass
+                    st.experimental_rerun()
 
 
 def mostrar_resumen_metricas(gestor):
