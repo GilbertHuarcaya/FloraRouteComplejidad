@@ -52,11 +52,17 @@ def inicializar_gestor(_grafo, _factor_trafico, _viveros_df, _nodos_coords):
             'girasoles': int(row['stock_girasoles']),
             'tulipanes': int(row['stock_tulipanes'])
         })
-        
+        # Obtener el nodo mas cercano a las coordenadas del vivero
+        try:
+            nodo_asociado = encontrar_nodo_cercano(float(row['lat']), float(row['lon']), _nodos_coords)
+        except Exception:
+            # fallback al nodo provisto en CSV si la busqueda falla
+            nodo_asociado = int(row.get('nodo_id', -1)) if row.get('nodo_id') not in (None, '') else -1
+
         vivero = Vivero(
             vivero_id=int(row['vivero_id']),
             nombre=row['nombre'],
-            nodo_id=int(row['nodo_id']),
+            nodo_id=int(nodo_asociado),
             lat=float(row['lat']),
             lon=float(row['lon']),
             inventario=inventario,
@@ -109,6 +115,13 @@ def main():
             st.session_state.gestor = inicializar_gestor(grafo, factor_trafico, viveros_df, nodos_coords)
         
         gestor = st.session_state.gestor
+
+    # mantener viveros_df en session_state para permitir actualizaciones en runtime
+    if 'viveros_df' not in st.session_state:
+        st.session_state.viveros_df = viveros_df
+    else:
+        # usar la version en session_state (puede haber sido actualizada)
+        viveros_df = st.session_state.viveros_df
     
     if not grafo:
         st.error("No se pudo cargar el grafo de Lima")
@@ -139,15 +152,112 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
     st.sidebar.header("Control de Rutas")
     st.sidebar.subheader("1. Seleccionar Vivero Origen")
     
+    # Seccion 1.5: Gestion de viveros - crear nuevo vivero y persistir
+    with st.sidebar.expander("Crear nuevo vivero"):
+        nombre_new = st.text_input("Nombre del vivero", value="", key="nombre_new")
+        lat_new = st.number_input("Latitud", min_value=-90.0, max_value=90.0, format="%.8f", value=-12.0464, key="lat_new")
+        lon_new = st.number_input("Longitud", min_value=-180.0, max_value=180.0, format="%.8f", value=-77.0428, key="lon_new")
+        capacidad_new = st.number_input("Capacidad de entrega", min_value=1, max_value=1000, value=20, key="capacidad_new")
+        stock_rosas_new = st.number_input("Stock Rosas", min_value=0, max_value=100000, value=100, key="stock_rosas_new")
+        stock_claveles_new = st.number_input("Stock Claveles", min_value=0, max_value=100000, value=50, key="stock_claveles_new")
+        stock_lirios_new = st.number_input("Stock Lirios", min_value=0, max_value=100000, value=30, key="stock_lirios_new")
+        horario_inicio_new = st.text_input("Horario inicio (HH:MM)", value="08:00", key="horario_inicio_new")
+        horario_fin_new = st.text_input("Horario fin (HH:MM)", value="18:00", key="horario_fin_new")
+        if st.button("Guardar vivero", key="btn_guardar_vivero"):
+            # Persistir en CSV y registrar en gestor
+            try:
+                # Rutas relativas
+                csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'viveros.csv'))
+                df_exist = pd.read_csv(csv_path)
+                # calcular nuevo id
+                if 'vivero_id' in df_exist.columns and not df_exist.empty:
+                    nuevo_id = int(df_exist['vivero_id'].max()) + 1
+                else:
+                    nuevo_id = 1
+
+                nuevo_reg = {
+                    'vivero_id': nuevo_id,
+                    'nombre': nombre_new,
+                    'nodo_id': '',
+                    'lat': float(lat_new),
+                    'lon': float(lon_new),
+                    'stock_rosas': int(stock_rosas_new),
+                    'stock_claveles': int(stock_claveles_new),
+                    'stock_lirios': int(stock_lirios_new),
+                    'stock_girasoles': 0,
+                    'stock_tulipanes': 0,
+                    'capacidad_entrega': int(capacidad_new),
+                    'horario_inicio': horario_inicio_new,
+                    'horario_fin': horario_fin_new
+                }
+                # Append and save (pd.append deprecated)
+                df_exist = pd.concat([df_exist, pd.DataFrame([nuevo_reg])], ignore_index=True)
+                df_exist.to_csv(csv_path, index=False)
+
+                # registrar en gestor con nodo asociado
+                try:
+                    nodo_asoc = encontrar_nodo_cercano(float(lat_new), float(lon_new), nodos_coords)
+                except Exception:
+                    nodo_asoc = -1
+
+                inventario_new = Inventario({
+                    'rosas': int(stock_rosas_new),
+                    'claveles': int(stock_claveles_new),
+                    'lirios': int(stock_lirios_new),
+                    'girasoles': 0,
+                    'tulipanes': 0
+                })
+
+                vivero_obj = Vivero(
+                    vivero_id=int(nuevo_id),
+                    nombre=nombre_new,
+                    nodo_id=int(nodo_asoc) if nodo_asoc is not None else -1,
+                    lat=float(lat_new),
+                    lon=float(lon_new),
+                    inventario=inventario_new,
+                    capacidad_entrega=int(capacidad_new),
+                    horario_inicio=horario_inicio_new,
+                    horario_fin=horario_fin_new
+                )
+
+                gestor.registrar_vivero(vivero_obj)
+
+                # Actualizar session_state para que aparezca en multiselect y en mapa
+                display_new = f"{nombre_new} (ID: {nuevo_id})"
+                ms = list(st.session_state.get('multiselect_viveros', []))
+                if display_new not in ms:
+                    ms.append(display_new)
+                # set the session state BEFORE the multiselect widget is created
+                st.session_state['multiselect_viveros'] = ms
+                st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(nuevo_id)]))
+                # Actualizar viveros_df en session_state para que aparezca inmediatamente
+                try:
+                    existing_df = st.session_state.get('viveros_df')
+                    if existing_df is not None:
+                        st.session_state['viveros_df'] = pd.concat([existing_df, pd.DataFrame([nuevo_reg])], ignore_index=True)
+                except Exception:
+                    pass
+
+                st.success("Vivero guardado y registrado correctamente")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Error guardando vivero: {e}")
+
     if not viveros_df.empty:
         # Mostrar multiselect para elegir varios viveros como posibles puntos de partida
         opciones_viveros = {f"{row['nombre']} (ID: {row['vivero_id']})": int(row['vivero_id']) for _, row in viveros_df.iterrows()}
         opciones_display = list(opciones_viveros.keys())
 
+        # Sanitizar valores actuales en session_state.multiselect_viveros antes de instanciar widget
+        current_ms = list(st.session_state.get('multiselect_viveros', []))
+        sanitized = [v for v in current_ms if v in opciones_display]
+        if sanitized != current_ms:
+            st.session_state['multiselect_viveros'] = sanitized
+
+        # Use session_state value (key) so programmatic updates persist
         seleccion_display = st.sidebar.multiselect(
             "Viveros de origen (puede seleccionar varios):",
             options=opciones_display,
-            default=st.session_state.multiselect_viveros,
             key="multiselect_viveros"
         )
 
@@ -183,7 +293,6 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
             st.sidebar.info("Selecciona al menos un vivero para definir un origen activo")
     
     st.sidebar.divider()
-    
     # Seccion 2: Agregar destinos (RF-02)
     st.sidebar.subheader("2. Agregar Destinos")
     
@@ -335,9 +444,15 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
         else:
             icon = folium.Icon(color='blue', icon='home', prefix='fa')
 
+        # obtener nodo asociado (cercano) para mostrar y referencia de ruta
+        try:
+            nodo_asociado = encontrar_nodo_cercano(float(vivero['lat']), float(vivero['lon']), nodos_coords)
+        except Exception:
+            nodo_asociado = vivero.get('nodo_id') if 'vivero' in locals() else vid
+
         folium.Marker(
             [float(vivero['lat']), float(vivero['lon'])],
-            popup=f"<b>{vivero['nombre']}</b><br>ID: {vid}",
+            popup=f"<b>{vivero['nombre']}</b><br>ID: {vid}<br>Nodo asociado: {nodo_asociado}",
             tooltip=display,
             icon=icon
         ).add_to(mapa)
