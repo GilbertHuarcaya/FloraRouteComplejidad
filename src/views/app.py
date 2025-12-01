@@ -151,12 +151,6 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
     
     st.sidebar.header("Control de Rutas")
     st.sidebar.subheader("1. Seleccionar Vivero Origen")
-    # Opcion: validacion por simulacion (origen -> suplente -> destino)
-    usar_simulacion = st.sidebar.checkbox("Usar validación por simulación (reabastecimiento)", value=False, key="usar_simulacion")
-    try:
-        gestor.set_validacion_por_simulacion(usar_simulacion)
-    except Exception:
-        pass
     # Nota: no escribir keys de widgets en session_state aquí.
     # El formulario de crear vivero leerá `st.session_state.get('mapa_clicked')`
     # localmente para poblar valores por defecto (igual que en agregar destino).
@@ -304,7 +298,8 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         seleccion_display = st.sidebar.multiselect(
             "Viveros de origen (puede seleccionar varios):",
             options=opciones_display,
-            key="multiselect_viveros"
+            key="multiselect_viveros",
+            help="Los viveros seleccionados actuarán automáticamente como suplementarios si el origen principal se agota"
         )
 
         # Actualizar ids seleccionados en session_state
@@ -347,59 +342,40 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         else:
             st.sidebar.info("Selecciona al menos un vivero para definir un origen activo")
 
-    # Si algun vivero seleccionado esta agotado, avisar y permitir agregar un suplementario
+    # Mostrar información sobre viveros agotados (solo informativo)
     try:
         agotados = gestor.obtener_viveros_agotados()
     except Exception:
         agotados = []
 
-    # intersectar con seleccionados
     seleccionados_ids = list(st.session_state.get('viveros_seleccionados_ids', []))
     agotados_seleccionados = [vid for vid in seleccionados_ids if vid in agotados]
     if agotados_seleccionados:
         nombres_agotados = []
-        opciones_suplentes = {}
         for _, row in viveros_df.iterrows():
             vid = int(row['vivero_id'])
             display = f"{row['nombre']} (ID: {vid})"
             if vid in agotados_seleccionados:
                 nombres_agotados.append(display)
-            # preparar opciones para suplentes (no agotados)
-            if vid not in agotados:
-                opciones_suplentes[display] = vid
-
-        st.sidebar.warning(f"El/Los vivero(s) agotados: {', '.join(nombres_agotados)}. Seleccione un vivero suplementario para completar los pedidos.")
-
-        if opciones_suplentes:
-            seleccion_suplente_display = st.sidebar.selectbox("Elegir vivero suplementario:", options=list(opciones_suplentes.keys()), key="select_suplente")
-            if st.sidebar.button("Agregar vivero suplementario", key="btn_agregar_suplente"):
-                suplente_id = opciones_suplentes.get(seleccion_suplente_display)
-                if suplente_id:
-                    exito, err = gestor.agregar_vivero_suplementario(suplente_id)
-                    if exito:
-                        # Guardar en pendientes para aplicar en el próximo ciclo
-                        if 'pending_multiselect_add' not in st.session_state:
-                            st.session_state['pending_multiselect_add'] = []
-                        if seleccion_suplente_display not in st.session_state.get('pending_multiselect_add', []):
-                            st.session_state['pending_multiselect_add'].append(seleccion_suplente_display)
-                        
-                        st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(suplente_id)]))
-
-                        # sincronizar seleccion con gestor
-                        try:
-                            gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
-                        except Exception:
-                            pass
-                        st.sidebar.success("Vivero suplementario agregado. La ruta priorizara su visita al calcularla.")
-                        st.rerun()
-                    else:
-                        st.sidebar.error(f"Error: {err}")
-        else:
-            st.sidebar.error("No hay viveros disponibles como suplentes. Por favor cree o habilite otro vivero.")
+        
+        st.sidebar.info(f"ℹ️ Vivero(s) con stock bajo: {', '.join(nombres_agotados)}. El sistema usará automáticamente otros viveros seleccionados como suplementarios.")
     
     st.sidebar.divider()
     # Seccion 2: Agregar destinos (RF-02)
     st.sidebar.subheader("2. Agregar Destinos")
+    
+    # Sincronizar destinos con el gestor al inicio (para mantener consistencia)
+    if gestor.pedido_actual:
+        destinos_gestor = gestor.obtener_destinos_actuales()
+        st.session_state.destinos = [
+            {
+                'id': d['destino_id'],
+                'lat': d['lat'],
+                'lon': d['lon'],
+                'flores': d['flores']
+            }
+            for d in destinos_gestor
+        ]
     
     if (st.session_state.vivero_seleccionado is None) and (not st.session_state.viveros_seleccionados_ids):
         st.sidebar.info("Primero selecciona al menos un vivero origen (o confirma un origen activo)")
@@ -478,13 +454,20 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     error = str(e)
                 
                 if exito:
-                    st.session_state.contador_destinos += 1
-                    st.session_state.destinos.append({
-                        'id': st.session_state.contador_destinos,
-                        'lat': lat,
-                        'lon': lon,
-                        'flores': flores_req
-                    })
+                    # Sincronizar con los destinos del gestor (usar los IDs reales del gestor)
+                    destinos_gestor = gestor.obtener_destinos_actuales()
+                    if destinos_gestor:
+                        # Actualizar session_state.destinos con los datos del gestor
+                        st.session_state.destinos = [
+                            {
+                                'id': d['destino_id'],
+                                'lat': d['lat'],
+                                'lon': d['lon'],
+                                'flores': d['flores']
+                            }
+                            for d in destinos_gestor
+                        ]
+                        st.session_state.contador_destinos = max([d['id'] for d in st.session_state.destinos]) if st.session_state.destinos else 0
                     st.success("Destino agregado")
                     st.rerun()
                 else:
@@ -493,6 +476,21 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         # Mostrar destinos agregados
         if st.session_state.destinos:
             st.sidebar.subheader("Destinos agregados:")
+            
+            # Sincronizar con el gestor antes de mostrar (para asegurar consistencia)
+            if gestor.pedido_actual:
+                destinos_gestor = gestor.obtener_destinos_actuales()
+                if len(destinos_gestor) != len(st.session_state.destinos):
+                    # Actualizar desde el gestor
+                    st.session_state.destinos = [
+                        {
+                            'id': d['destino_id'],
+                            'lat': d['lat'],
+                            'lon': d['lon'],
+                            'flores': d['flores']
+                        }
+                        for d in destinos_gestor
+                    ]
             
             for dest in st.session_state.destinos:
                 with st.sidebar.expander(f"Destino {dest['id']}"):
@@ -503,7 +501,17 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     if st.button(f"Eliminar", key=f"btn_eliminar_{dest['id']}"):
                         exito, error = gestor.eliminar_destino(dest['id'])
                         if exito:
-                            st.session_state.destinos = [d for d in st.session_state.destinos if d['id'] != dest['id']]
+                            # Sincronizar desde el gestor después de eliminar
+                            destinos_gestor = gestor.obtener_destinos_actuales()
+                            st.session_state.destinos = [
+                                {
+                                    'id': d['destino_id'],
+                                    'lat': d['lat'],
+                                    'lon': d['lon'],
+                                    'flores': d['flores']
+                                }
+                                for d in destinos_gestor
+                            ]
                             st.rerun()
                         else:
                             st.error(error)
@@ -521,7 +529,21 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
             help="Si esta marcado, la ruta vuelve al vivero de origen"
         )
         
+        # Checkbox de validación por simulación (reabastecimiento)
+        usar_simulacion = st.sidebar.checkbox(
+            "🔄 Calcular con reabastecimiento",
+            value=False,
+            key="usar_simulacion",
+            help="Si está marcado, calcula una ruta que incluye paradas en viveros adicionales para reabastecer según sea necesario"
+        )
+        
         if st.sidebar.button("Calcular Ruta", key="btn_calcular"):
+            # Activar/desactivar simulación en el gestor según el checkbox
+            try:
+                gestor.set_validacion_por_simulacion(usar_simulacion)
+            except Exception:
+                pass
+            
             with st.spinner("Calculando ruta optima..."):
                 # Sincronizar destinos de la UI con el pedido del gestor
                 ui_destinos = list(st.session_state.get('destinos', []))
@@ -560,11 +582,19 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     # no continuamos al calculo de ruta
                     pass
                 else:
+                    # Si NO se usa simulación, limpiar asignaciones previas
+                    if not usar_simulacion:
+                        if hasattr(gestor, 'asignaciones_reabastecimiento'):
+                            gestor.asignaciones_reabastecimiento = None
+                    
                     exito, error = gestor.calcular_ruta_optima(retornar_origen)
 
                     if exito:
                         st.session_state.ruta_calculada = True
-                        st.sidebar.success("Ruta calculada exitosamente")
+                        if usar_simulacion:
+                            st.sidebar.success("✅ Ruta con reabastecimiento calculada exitosamente")
+                        else:
+                            st.sidebar.success("✅ Ruta calculada exitosamente")
                     else:
                         st.sidebar.error(f"Error: {error}")
     else:
@@ -573,6 +603,10 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
 
 def mostrar_mapa(gestor, viveros_df, nodos_coords):
     """Muestra el mapa interactivo con ruta real (RF-04)"""
+    
+    # Inicializar atributo si no existe (para gestores creados antes de esta feature)
+    if not hasattr(gestor, 'asignaciones_reabastecimiento'):
+        gestor.asignaciones_reabastecimiento = None
     
     # Crear mapa centrado en Lima
     mapa = folium.Map(
@@ -650,6 +684,31 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
         
         st.write(f"**Destinos agregados:** {len(st.session_state.destinos)}")
         
+        # Mostrar información de reabastecimiento si hay simulación activa
+        if hasattr(gestor, 'asignaciones_reabastecimiento') and gestor.asignaciones_reabastecimiento:
+            st.write("### 🔄 Reabastecimiento Activo")
+            viveros_usados = set()
+            for destino_id, suppliers in gestor.asignaciones_reabastecimiento.items():
+                viveros_usados.update(suppliers.keys())
+            
+            viveros_nombres = []
+            for vid in viveros_usados:
+                viv = gestor.viveros.get(vid)
+                if viv:
+                    viveros_nombres.append(f"{viv.nombre} (ID: {vid})")
+            
+            st.write(f"**Viveros participantes:** {', '.join(viveros_nombres)}")
+            
+            # Detalle por destino
+            st.write("**Asignación por destino:**")
+            for destino_id, suppliers in gestor.asignaciones_reabastecimiento.items():
+                st.write(f"  - Destino {destino_id}:")
+                for vid, flores in suppliers.items():
+                    viv = gestor.viveros.get(vid)
+                    nombre_viv = viv.nombre if viv else f"Vivero {vid}"
+                    flores_str = ", ".join([f"{f}: {q}" for f, q in flores.items()])
+                    st.write(f"    • {nombre_viv}: {flores_str}")
+        
         if st.session_state.ruta_calculada and gestor.ruta_actual:
             ruta = gestor.ruta_actual
             st.write(f"**Secuencia de visita:** {ruta.secuencia_visitas}")
@@ -685,11 +744,43 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                 
                 # Agregar marcadores en los puntos de la secuencia (no intermedios)
                 secuencia = ruta.secuencia_visitas
+                nodo_origen = secuencia[0] if secuencia else None
+                
+                # Identificar qué nodos son viveros (mirando todos los viveros registrados)
+                nodos_viveros = set()
+                viveros_dict = {}  # nodo_id -> nombre_vivero
+                for _, viv_row in viveros_df.iterrows():
+                    try:
+                        nodo_vivero = encontrar_nodo_cercano(float(viv_row['lat']), float(viv_row['lon']), nodos_coords)
+                        nodos_viveros.add(nodo_vivero)
+                        viveros_dict[nodo_vivero] = viv_row['nombre']
+                    except Exception:
+                        pass
+                
+                # Identificar qué nodos son destinos
+                nodos_destinos = set()
+                for dest in st.session_state.destinos:
+                    if 'nodo_id' in dest and dest['nodo_id']:
+                        nodos_destinos.add(dest['nodo_id'])
+                    else:
+                        # Buscar nodo cercano
+                        try:
+                            nodo_dest = encontrar_nodo_cercano(dest['lat'], dest['lon'], nodos_coords)
+                            nodos_destinos.add(nodo_dest)
+                        except Exception:
+                            pass
+                
                 for i, nodo_id in enumerate(secuencia):
                     if nodo_id in nodos_coords:
                         lat, lon = nodos_coords[nodo_id]
+                        
+                        # Determinar tipo de nodo
+                        es_vivero = nodo_id in nodos_viveros
+                        es_destino = nodo_id in nodos_destinos
+                        es_retorno = (i == len(secuencia) - 1 and nodo_id == nodo_origen)
+                        
                         if i == 0:
-                            # Origen
+                            # Origen inicial
                             folium.CircleMarker(
                                 [lat, lon],
                                 radius=10,
@@ -697,10 +788,32 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                                 fill=True,
                                 fillColor='lightgreen',
                                 fillOpacity=0.9,
-                                tooltip=f"Inicio (nodo {nodo_id})"
+                                tooltip=f"Inicio: {viveros_dict.get(nodo_id, f'nodo {nodo_id}')}"
+                            ).add_to(mapa)
+                        elif es_retorno:
+                            # Retorno al origen - NO es una parada de entrega
+                            folium.CircleMarker(
+                                [lat, lon],
+                                radius=10,
+                                color='darkgreen',
+                                fill=True,
+                                fillColor='orange',
+                                fillOpacity=0.7,
+                                tooltip=f"Retorno: {viveros_dict.get(nodo_id, f'nodo {nodo_id}')}"
+                            ).add_to(mapa)
+                        elif es_vivero and not es_destino:
+                            # Vivero de reabastecimiento (no es destino)
+                            folium.CircleMarker(
+                                [lat, lon],
+                                radius=9,
+                                color='blue',
+                                fill=True,
+                                fillColor='lightblue',
+                                fillOpacity=0.8,
+                                tooltip=f"🔄 Reabastecimiento {i}: {viveros_dict.get(nodo_id, f'nodo {nodo_id}')}"
                             ).add_to(mapa)
                         else:
-                            # Parada
+                            # Destino de entrega
                             folium.CircleMarker(
                                 [lat, lon],
                                 radius=8,
@@ -708,8 +821,24 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                                 fill=True,
                                 fillColor='red',
                                 fillOpacity=0.9,
-                                tooltip=f"Parada {i} (nodo {nodo_id})"
+                                tooltip=f"📦 Entrega {i} (nodo {nodo_id})"
                             ).add_to(mapa)
+                
+                # Agregar leyenda al mapa cuando hay ruta con reabastecimiento
+                if hasattr(gestor, 'asignaciones_reabastecimiento') and gestor.asignaciones_reabastecimiento:
+                    leyenda_html = '''
+                    <div style="position: fixed; 
+                                bottom: 50px; left: 50px; width: 280px; height: auto; 
+                                background-color: white; z-index:9999; font-size:14px;
+                                border:2px solid grey; border-radius: 5px; padding: 10px">
+                    <p style="margin: 0; font-weight: bold; text-align: center;">Leyenda de Ruta</p>
+                    <p style="margin: 5px 0;"><span style="color: lightgreen; font-size: 20px;">●</span> Origen inicial</p>
+                    <p style="margin: 5px 0;"><span style="color: lightblue; font-size: 20px;">●</span> 🔄 Reabastecimiento</p>
+                    <p style="margin: 5px 0;"><span style="color: red; font-size: 20px;">●</span> 📦 Entrega a destino</p>
+                    <p style="margin: 5px 0;"><span style="color: orange; font-size: 20px;">●</span> Retorno al origen</p>
+                    </div>
+                    '''
+                    mapa.get_root().html.add_child(folium.Element(leyenda_html))
     
     # Mostrar mapa y capturar clicks
     # Devolver tambien el ultimo objeto clickeado para detectar clicks sobre marcadores

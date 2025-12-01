@@ -37,9 +37,9 @@ class GestorRutas:
         
         self.contador_destinos = 0
         self.contador_rutas = 0
-        self.viveros_suplentes: List[int] = []  # viveros adicionales para reabastecimiento
-        self.viveros_seleccionados_ids: List[int] = []  # viveros que el usuario seleccionó como orígenes
+        self.viveros_seleccionados_ids: List[int] = []  # viveros que el usuario seleccionó como orígenes (se usan como suplementarios automáticamente)
         self.validacion_por_simulacion: bool = False
+        self.asignaciones_reabastecimiento: Optional[Dict] = None  # Guarda qué viveros reabasten cada destino
     
     def registrar_vivero(self, vivero: Vivero) -> bool:
         """
@@ -110,14 +110,10 @@ class GestorRutas:
             return False, error
         
         # Construir lista de proveedores ordenada: origen activo primero,
-        # luego los seleccionados y finalmente los suplementarios (sin duplicados)
+        # luego los seleccionados (que actúan automáticamente como suplementarios)
         supplier_ids = [self.vivero_actual.vivero_id]
         for vid in self.viveros_seleccionados_ids:
             if vid != self.vivero_actual.vivero_id and vid in self.viveros and vid not in supplier_ids:
-                supplier_ids.append(vid)
-        # incluir viveros suplementarios (agregados por el usuario) para validaciones
-        for vid in self.viveros_suplentes:
-            if vid not in supplier_ids and vid in self.viveros:
                 supplier_ids.append(vid)
 
         # Verificar capacidad agregada (suma de capacidades de los viveros seleccionados)
@@ -188,6 +184,8 @@ class GestorRutas:
             # sim_res es el mapa de asignacion por destino/suplidor
             if isinstance(sim_res, dict):
                 asignaciones = sim_res
+                # Guardar asignaciones para usar en calcular_ruta_optima
+                self.asignaciones_reabastecimiento = asignaciones
             else:
                 asignaciones = {}
         else:
@@ -320,32 +318,75 @@ class GestorRutas:
         if not self.pedido_actual.validar_rango():
             return False, "Debe haber entre 1 y 20 destinos"
         
-        # Extraer nodos
-        origen_nodo = self.vivero_actual.nodo_id
+        # Extraer nodos de destinos
         destinos_nodos = [d.nodo_id for d in self.pedido_actual.destinos]
-
-        # Si hay viveros suplentes, priorizarlos al inicio de la lista de nodos
-        if self.viveros_suplentes:
-            suplentes_nodos = []
-            for vid in self.viveros_suplentes:
+        origen_nodo = self.vivero_actual.nodo_id
+        
+        # Si la validación por simulación está activa, recalcular asignaciones con TODOS los destinos
+        if self.validacion_por_simulacion:
+            # Construir lista de supplier_ids (origen + seleccionados)
+            supplier_ids = [self.vivero_actual.vivero_id]
+            for vid in self.viveros_seleccionados_ids:
+                if vid != self.vivero_actual.vivero_id and vid in self.viveros and vid not in supplier_ids:
+                    supplier_ids.append(vid)
+            
+            # Recalcular simulación con TODOS los destinos actuales
+            sim_ok, sim_res = self._simular_entregas_con_reabastecimiento(
+                self.pedido_actual.destinos,
+                supplier_ids
+            )
+            
+            if sim_ok and isinstance(sim_res, dict):
+                self.asignaciones_reabastecimiento = sim_res
+            else:
+                # Si falla la simulación, no hay asignaciones
+                self.asignaciones_reabastecimiento = None
+        
+        # Si hay asignaciones de reabastecimiento (simulación activa), construir ruta con viveros
+        if self.asignaciones_reabastecimiento:
+            # Extraer todos los viveros que participan en el reabastecimiento
+            viveros_reabastecimiento = set()
+            for destino_id, suppliers in self.asignaciones_reabastecimiento.items():
+                viveros_reabastecimiento.update(suppliers.keys())
+            
+            # Convertir IDs de viveros a nodos
+            nodos_viveros_reabast = []
+            for vid in viveros_reabastecimiento:
                 v = self.viveros.get(vid)
                 if v:
-                    suplentes_nodos.append(v.nodo_id)
-            # Prepend suplente nodes so la ruta pase por ellos primero
-            destinos_nodos = suplentes_nodos + destinos_nodos
-        
-        # Precalcular matriz de distancias
-        nodos_interes = [origen_nodo] + destinos_nodos
-        self.calculador.precalcular_matriz_distancias(nodos_interes)
-        
-        # Calcular ruta con medicion de tiempo
-        tiempo_inicio = time.time()
-        distancia_total, secuencia = self.calculador.calcular_ruta_tsp(
-            origen_nodo,
-            destinos_nodos,
-            retornar_origen
-        )
-        tiempo_fin = time.time()
+                    nodo = getattr(v, 'nodo_id', None)
+                    if nodo is None or nodo == -1:
+                        nodo = self._buscar_nodo_cercano(v.lat, v.lon)
+                    if nodo not in nodos_viveros_reabast and nodo != origen_nodo:
+                        nodos_viveros_reabast.append(nodo)
+            
+            # Construir lista de nodos a visitar: viveros de reabastecimiento + destinos
+            nodos_a_visitar = nodos_viveros_reabast + destinos_nodos
+            
+            # Precalcular matriz de distancias
+            nodos_interes = [origen_nodo] + nodos_a_visitar
+            self.calculador.precalcular_matriz_distancias(nodos_interes)
+            
+            # Calcular ruta TSP incluyendo viveros y destinos
+            tiempo_inicio = time.time()
+            distancia_total, secuencia = self.calculador.calcular_ruta_tsp(
+                origen_nodo,
+                nodos_a_visitar,
+                retornar_origen
+            )
+            tiempo_fin = time.time()
+        else:
+            # Ruta simple: solo origen y destinos
+            nodos_interes = [origen_nodo] + destinos_nodos
+            self.calculador.precalcular_matriz_distancias(nodos_interes)
+            
+            tiempo_inicio = time.time()
+            distancia_total, secuencia = self.calculador.calcular_ruta_tsp(
+                origen_nodo,
+                destinos_nodos,
+                retornar_origen
+            )
+            tiempo_fin = time.time()
         
         # Calcular camino completo nodo por nodo
         camino_completo, distancia_real = self.calculador.calcular_camino_completo(secuencia)
@@ -527,6 +568,7 @@ class GestorRutas:
                 for sid in comb:
                     for f, c in supplier_stocks.get(sid, {}).items():
                         disponible[f] = disponible.get(f, 0) + int(c)
+                
                 ok = True
                 for f, req in demanda_total.items():
                     if disponible.get(f, 0) < req:
@@ -663,19 +705,6 @@ class GestorRutas:
                 continue
         return agotados
 
-    def agregar_vivero_suplementario(self, vivero_id: int) -> Tuple[bool, Optional[str]]:
-        """Agrega un vivero suplementario para reabastecimiento de ruta
-
-        No crea un nuevo pedido; solo marca el vivero para ser visitado
-        durante el calculo de la ruta (priorizado al inicio).
-        """
-        if vivero_id not in self.viveros:
-            return False, f"El vivero {vivero_id} no existe"
-        if vivero_id in self.viveros_suplentes:
-            return True, None
-        self.viveros_suplentes.append(vivero_id)
-        return True, None
-    
     def obtener_destinos_actuales(self) -> List[Dict]:
         """Retorna lista de destinos del pedido actual"""
         if self.pedido_actual is None:
@@ -691,3 +720,17 @@ class GestorRutas:
             }
             for d in self.pedido_actual.destinos
         ]
+    
+    def obtener_viveros_reabastecimiento(self) -> List[int]:
+        """
+        Retorna lista de IDs de viveros que participan en el reabastecimiento
+        según las asignaciones de la simulación
+        """
+        if not self.asignaciones_reabastecimiento:
+            return []
+        
+        viveros = set()
+        for destino_id, suppliers in self.asignaciones_reabastecimiento.items():
+            viveros.update(suppliers.keys())
+        
+        return list(viveros)

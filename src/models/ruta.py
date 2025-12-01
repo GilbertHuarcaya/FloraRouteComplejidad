@@ -34,7 +34,17 @@ class Ruta:
     def calcular_metricas(self):
         """Calcula metricas derivadas"""
         if len(self.secuencia_visitas) > 1:
-            self.numero_paradas = len(self.secuencia_visitas) - 1  # Sin contar origen
+            # Verificar si retorna al origen (último nodo == primer nodo)
+            retorna_origen = (self.secuencia_visitas[-1] == self.secuencia_visitas[0])
+            
+            if retorna_origen:
+                # El último nodo es retorno, no es una parada de entrega
+                # Número de paradas = longitud - 2 (sin origen inicial ni retorno final)
+                self.numero_paradas = len(self.secuencia_visitas) - 2
+            else:
+                # Sin retorno: Número de paradas = longitud - 1 (sin contar origen)
+                self.numero_paradas = len(self.secuencia_visitas) - 1
+            
             self.distancia_promedio_parada = self.distancia_total / self.numero_paradas if self.numero_paradas > 0 else 0
             self.tiempo_promedio_parada = self.tiempo_total / self.numero_paradas if self.numero_paradas > 0 else 0
         else:
@@ -60,11 +70,16 @@ class Ruta:
             Lista de diccionarios con informacion de cada parada
         """
         orden = []
+        retorna_origen = len(self.secuencia_visitas) > 1 and (self.secuencia_visitas[-1] == self.secuencia_visitas[0])
+        
         for i, nodo in enumerate(self.secuencia_visitas):
+            es_retorno = retorna_origen and (i == len(self.secuencia_visitas) - 1)
+            
             parada = {
                 'orden': i + 1,
                 'nodo_id': nodo,
-                'es_origen': (i == 0)
+                'es_origen': (i == 0),
+                'es_retorno': es_retorno
             }
             
             # Agregar metricas del segmento si existe
