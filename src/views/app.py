@@ -244,12 +244,15 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
 
                     gestor.registrar_vivero(vivero_obj)
 
-                    # Actualizar session_state (viveros_df y multiselect) antes de rerun
+                    # Actualizar session_state (viveros_df) - NO modificar multiselect_viveros aquí
                     display_new = f"{crear_nombre} (ID: {nuevo_id})"
-                    ms = list(st.session_state.get('multiselect_viveros', []))
-                    if display_new not in ms:
-                        ms.append(display_new)
-                    st.session_state['multiselect_viveros'] = ms
+                    
+                    # Guardar en una key pendiente para aplicar en el próximo ciclo
+                    if 'pending_multiselect_add' not in st.session_state:
+                        st.session_state['pending_multiselect_add'] = []
+                    if display_new not in st.session_state.get('pending_multiselect_add', []):
+                        st.session_state['pending_multiselect_add'].append(display_new)
+                    
                     st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(nuevo_id)]))
 
                     # sincronizar seleccion con gestor
@@ -279,11 +282,23 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         opciones_viveros = {f"{row['nombre']} (ID: {row['vivero_id']})": int(row['vivero_id']) for _, row in viveros_df.iterrows()}
         opciones_display = list(opciones_viveros.keys())
 
-        # Sanitizar valores actuales en session_state.multiselect_viveros antes de instanciar widget
+        # Aplicar cambios pendientes del ciclo anterior ANTES de crear el widget
         current_ms = list(st.session_state.get('multiselect_viveros', []))
+        pending_adds = st.session_state.get('pending_multiselect_add', [])
+        if pending_adds:
+            for item in pending_adds:
+                if item not in current_ms and item in opciones_display:
+                    current_ms.append(item)
+            st.session_state['pending_multiselect_add'] = []  # Limpiar pendientes
+        
+        # Sanitizar valores actuales ANTES de instanciar widget
         sanitized = [v for v in current_ms if v in opciones_display]
         if sanitized != current_ms:
-            st.session_state['multiselect_viveros'] = sanitized
+            current_ms = sanitized
+        
+        # Actualizar ANTES de crear widget (no después)
+        if st.session_state.get('multiselect_viveros') != current_ms:
+            st.session_state['multiselect_viveros'] = current_ms
 
         # Use session_state value (key) so programmatic updates persist
         seleccion_display = st.sidebar.multiselect(
@@ -322,6 +337,10 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                 if exito:
                     st.session_state.vivero_seleccionado = vivero_id
                     st.session_state.vivero_origen_activo = vivero_id
+                    # Al cambiar el origen, limpiar destinos locales para evitar desincronía
+                    st.session_state.destinos = []
+                    st.session_state.contador_destinos = 0
+                    st.session_state.ruta_calculada = False
                     st.sidebar.success(f"Origen activo: {origen_display}")
                 else:
                     st.sidebar.error(f"Error: {error}")
@@ -358,11 +377,12 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                 if suplente_id:
                     exito, err = gestor.agregar_vivero_suplementario(suplente_id)
                     if exito:
-                        # asegurar aparece en multiselect
-                        ms = list(st.session_state.get('multiselect_viveros', []))
-                        if seleccion_suplente_display not in ms:
-                            ms.append(seleccion_suplente_display)
-                            st.session_state['multiselect_viveros'] = ms
+                        # Guardar en pendientes para aplicar en el próximo ciclo
+                        if 'pending_multiselect_add' not in st.session_state:
+                            st.session_state['pending_multiselect_add'] = []
+                        if seleccion_suplente_display not in st.session_state.get('pending_multiselect_add', []):
+                            st.session_state['pending_multiselect_add'].append(seleccion_suplente_display)
+                        
                         st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(suplente_id)]))
 
                         # sincronizar seleccion con gestor
@@ -437,7 +457,19 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     'lirios': int(lirios)
                 }
                 
-                # Encontrar nodo mas cercano
+                # Antes de agregar destino, sincronizar el estado de viveros seleccionados y origen activo
+                try:
+                    gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
+                    if st.session_state.get('vivero_origen_activo'):
+                        try:
+                            gestor.seleccionar_vivero(st.session_state.get('vivero_origen_activo'))
+                        except Exception:
+                            # no interrumpir si seleccionar_vivero falla
+                            pass
+                except Exception:
+                    pass
+
+                # Encontrar nodo mas cercano y agregar destino usando el gestor
                 try:
                     nodo_cercano = encontrar_nodo_cercano(lat, lon, nodos_coords)
                     exito, error = gestor.agregar_destino(lat, lon, flores_req)
@@ -491,13 +523,50 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         
         if st.sidebar.button("Calcular Ruta", key="btn_calcular"):
             with st.spinner("Calculando ruta optima..."):
-                exito, error = gestor.calcular_ruta_optima(retornar_origen)
-                
-                if exito:
-                    st.session_state.ruta_calculada = True
-                    st.sidebar.success("Ruta calculada exitosamente")
+                # Sincronizar destinos de la UI con el pedido del gestor
+                ui_destinos = list(st.session_state.get('destinos', []))
+                pedido_count = gestor.pedido_actual.cantidad_destinos() if gestor.pedido_actual else 0
+                proceed = True
+                if (gestor.pedido_actual is None) or (pedido_count != len(ui_destinos)):
+                    # (Re)crear pedido en el gestor usando el origen activo
+                    origen_id = st.session_state.get('vivero_origen_activo') or st.session_state.get('vivero_seleccionado')
+                    if not origen_id:
+                        st.sidebar.error("No hay un origen activo para reconstruir el pedido")
+                        proceed = False
+                    else:
+                        ok, err = gestor.seleccionar_vivero(origen_id)
+                        if not ok:
+                            st.sidebar.error(f"Error al crear pedido en gestor: {err}")
+                            proceed = False
+                        else:
+                            # agregar destinos desde la UI al gestor
+                            recon_ok = True
+                            recon_err = None
+                            for d in ui_destinos:
+                                try:
+                                    ok, err = gestor.agregar_destino(d['lat'], d['lon'], d['flores'])
+                                except Exception as e:
+                                    ok = False
+                                    err = str(e)
+                                if not ok:
+                                    recon_ok = False
+                                    recon_err = err
+                                    break
+                            if not recon_ok:
+                                st.sidebar.error(f"Error al sincronizar destinos con el gestor: {recon_err}")
+                                proceed = False
+
+                if not proceed:
+                    # no continuamos al calculo de ruta
+                    pass
                 else:
-                    st.sidebar.error(f"Error: {error}")
+                    exito, error = gestor.calcular_ruta_optima(retornar_origen)
+
+                    if exito:
+                        st.session_state.ruta_calculada = True
+                        st.sidebar.success("Ruta calculada exitosamente")
+                    else:
+                        st.sidebar.error(f"Error: {error}")
     else:
         st.sidebar.info("Agrega al menos 1 destino para calcular ruta")
 
@@ -707,17 +776,18 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                         break
 
                 if encontrado:
-                    # actualizar multiselect y origen activo solo si hay cambios
-                    current = list(st.session_state.get('multiselect_viveros', [])) or []
+                    # Guardar en pendientes para aplicar en el próximo ciclo (NO modificar multiselect_viveros)
                     need_rerun = False
-                    if display not in current:
-                        current.append(display)
-                        st.session_state.multiselect_viveros = current
+                    if 'pending_multiselect_add' not in st.session_state:
+                        st.session_state['pending_multiselect_add'] = []
+                    if display not in st.session_state.get('pending_multiselect_add', []):
+                        st.session_state['pending_multiselect_add'].append(display)
                         need_rerun = True
 
-                    # reconstruir mapping local para ids
+                    # reconstruir mapping local para ids (considerar pendientes)
                     opciones_viveros_local = {f"{row['nombre']} (ID: {int(row['vivero_id'])})": int(row['vivero_id']) for _, row in viveros_df.iterrows()}
-                    nuevos_ids = [opciones_viveros_local[d] for d in current if d in opciones_viveros_local]
+                    current_effective = list(st.session_state.get('multiselect_viveros', [])) + st.session_state.get('pending_multiselect_add', [])
+                    nuevos_ids = [opciones_viveros_local[d] for d in current_effective if d in opciones_viveros_local]
                     if st.session_state.get('viveros_seleccionados_ids') != nuevos_ids:
                         st.session_state.viveros_seleccionados_ids = nuevos_ids
                         # sincronizar con gestor
@@ -750,6 +820,10 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                             gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
                         except Exception:
                             pass
+                        # limpiar destinos en la UI para evitar desincronía con el pedido del gestor
+                        st.session_state.destinos = []
+                        st.session_state.contador_destinos = 0
+                        st.session_state.ruta_calculada = False
                     except Exception:
                         pass
 

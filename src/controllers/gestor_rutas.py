@@ -109,10 +109,15 @@ class GestorRutas:
         if not valido:
             return False, error
         
-        # Construir lista de proveedores ordenada: origen activo primero, luego los seleccionados (sin duplicados)
+        # Construir lista de proveedores ordenada: origen activo primero,
+        # luego los seleccionados y finalmente los suplementarios (sin duplicados)
         supplier_ids = [self.vivero_actual.vivero_id]
         for vid in self.viveros_seleccionados_ids:
-            if vid != self.vivero_actual.vivero_id and vid in self.viveros:
+            if vid != self.vivero_actual.vivero_id and vid in self.viveros and vid not in supplier_ids:
+                supplier_ids.append(vid)
+        # incluir viveros suplementarios (agregados por el usuario) para validaciones
+        for vid in self.viveros_suplentes:
+            if vid not in supplier_ids and vid in self.viveros:
                 supplier_ids.append(vid)
 
         # Verificar capacidad agregada (suma de capacidades de los viveros seleccionados)
@@ -148,10 +153,13 @@ class GestorRutas:
                 stock_acumulado[flor] = stock_acumulado.get(flor, 0) + max(0, int(cant))
 
         # Validar que para cada tipo de flor la suma acumulada sea >= demanda total
-        for flor, req_total in demanda_total.items():
-            disponible = stock_acumulado.get(flor, 0)
-            if disponible < req_total:
-                return False, f"Stock insuficiente de {flor}: disponible={disponible}, requerido={req_total}.\nAsegure selección de viveros suplementarios que sumen el stock necesario y confirme el origen activo."
+        # Si la validacion por simulacion esta activada, OMITIMOS esta validacion temprana
+        # y delegamos la comprobacion a la simulacion que puede combinar suplentes.
+        if not self.validacion_por_simulacion:
+            for flor, req_total in demanda_total.items():
+                disponible = stock_acumulado.get(flor, 0)
+                if disponible < req_total:
+                    return False, f"Stock insuficiente de {flor}: disponible={disponible}, requerido={req_total}.\nAsegure selección de viveros suplementarios que sumen el stock necesario y confirme el origen activo."
 
         # Si no se proporciono nodo_id, buscar el mas cercano
         if nodo_id is None:
@@ -284,9 +292,8 @@ class GestorRutas:
         if self.pedido_actual is None:
             return False, "No hay un pedido activo"
         
-        # Validar que quede al menos 1 destino
-        if self.pedido_actual.cantidad_destinos() <= 1:
-            return False, "Debe haber al menos 1 destino"
+        # Permitir eliminar destinos incluso si queda 0 (para pruebas/edición en UI)
+        # La validación de rango para calcular ruta seguirá requiriendo entre 1 y 20 destinos.
         
         # Eliminar del pedido
         if not self.pedido_actual.eliminar_destino(destino_id):
@@ -529,18 +536,67 @@ class GestorRutas:
                     continue
 
                 # calcular coste de la ruta que visita proveedores (nodos) y destinos
-                proveedor_nodos = [supplier_nodes[sid] for sid in comb if supplier_nodes.get(sid) is not None]
+                proveedor_nodos = [supplier_nodes[sid] for sid in comb]
                 # armar lista de nodos de interes: origen + proveedores + destinos
                 nodos_interes = [supplier_nodes[origen_id]] + [n for n in proveedor_nodos if n != supplier_nodes[origen_id]] + destinos_nodos
+
+                def _approx_cost_by_coords(path_nodes: List[int], comb_sids: Tuple[int, ...]) -> float:
+                    # convierte una secuencia de nodos a coordenadas y suma distancias euclidianas
+                    coords = []  # list of (lat, lon)
+                    # origin
+                    # map node id to coords; for provider nodes that are -1, use vivero lat/lon
+                    # build mapping from node ids of providers to their vivero coords
+                    for n in path_nodes:
+                        if n is None or n == -1:
+                            # try to find matching provider by node -1 (use comb order)
+                            # fallback: skip
+                            continue
+                        if n in self.nodos_coords:
+                            coords.append(self.nodos_coords[n])
+                        else:
+                            # last resort: try to find a vivero with this nodo
+                            found = None
+                            for vid, v in self.viveros.items():
+                                if getattr(v, 'nodo_id', None) == n:
+                                    found = (v.lat, v.lon)
+                                    break
+                            if found:
+                                coords.append(found)
+                            else:
+                                # cannot resolve coord, skip
+                                continue
+                    if len(coords) < 2:
+                        return float('inf')
+                    total = 0.0
+                    for i in range(len(coords) - 1):
+                        lat1, lon1 = coords[i]
+                        lat2, lon2 = coords[i + 1]
+                        total += ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
+                    return total
+
+                coste = float('inf')
                 try:
-                    self.calculador.precalcular_matriz_distancias(nodos_interes)
-                    _, sec = self.calculador.calcular_ruta_tsp(supplier_nodes[origen_id], proveedor_nodos + destinos_nodos, retornar_origen=False)
+                    # intentar cálculo exacto con CalculadorRutas
+                    self.calculador.precalcular_matriz_distancias([n for n in nodos_interes if n is not None and n != -1])
+                    _, sec = self.calculador.calcular_ruta_tsp(supplier_nodes[origen_id], [n for n in proveedor_nodos if n is not None and n != -1] + destinos_nodos, retornar_origen=False)
                     # calcular camino completo y distancia real
                     _, distancia_real = self.calculador.calcular_camino_completo(sec)
                     coste = distancia_real
                 except Exception:
-                    # si falla el cálculo de ruta, saltar este subconjunto
-                    continue
+                    # fallback aproximado por coordenadas si faltan nodos en el grafo o falla el solver
+                    # construir path_nodes: origin node, provider nodes, destino nodes
+                    path_nodes = []
+                    # origin
+                    onode = supplier_nodes.get(origen_id, -1)
+                    path_nodes.append(onode)
+                    for sid in comb:
+                        path_nodes.append(supplier_nodes.get(sid, -1))
+                    path_nodes.extend(destinos_nodos)
+                    approx = _approx_cost_by_coords(path_nodes, comb)
+                    if approx == float('inf'):
+                        # no podemos estimar coste; saltar este subconjunto
+                        continue
+                    coste = approx
 
                 if coste < mejor_coste:
                     mejor_coste = coste
@@ -565,7 +621,7 @@ class GestorRutas:
             # ordenar proveedores por distancia al destino
             dist_list = []
             for sid, nodo in prov_nodes.items():
-                if nodo is None:
+                if nodo is None or nodo == -1:
                     continue
                 try:
                     dcost, _ = self.calculador.dijkstra(nodo, dest.nodo_id)
