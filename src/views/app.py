@@ -980,7 +980,7 @@ def mostrar_resumen_metricas(gestor):
         
         # ===== GUÍA DE RUTA DETALLADA =====
         st.markdown("---")
-        st.subheader("📋 Guía de Ruta Detallada")
+        st.subheader(" Guía de Ruta Detallada")
         st.markdown("**Instrucciones paso a paso para el conductor**")
         
         try:
@@ -1022,7 +1022,7 @@ def mostrar_resumen_metricas(gestor):
                     if gestor.vivero_actual:
                         nodo_origen = gestor.vivero_actual.nodo_id
                         if secuencia_nodos[0] == nodo_origen:
-                            waypoints[nodo_origen] = f"🚀 Origen: {gestor.vivero_actual.nombre}"
+                            waypoints[nodo_origen] = f"Origen: {gestor.vivero_actual.nombre}"
                         # Si la ruta retorna al origen, marcar último nodo
                         if len(secuencia_nodos) > 1 and secuencia_nodos[-1] == nodo_origen:
                             # No sobrescribir - ya está marcado como origen
@@ -1041,11 +1041,13 @@ def mostrar_resumen_metricas(gestor):
                     if not instrucciones:
                         st.info("ℹNo se pudieron generar instrucciones para esta ruta")
                     else:
-                        # 7. Validar consistencia
-                        total_dist_instrucciones = sum(inst.distancia_km for inst in instrucciones)
+                        # 7. Usar la distancia REAL calculada por el gestor (no recalcular)
+                        # Esto garantiza que ambas métricas sean idénticas
+                        distancia_total_real = gestor.ruta_actual.distancia_total
+                        
                         validacion = generador.validar_instrucciones(
                             instrucciones, 
-                            gestor.ruta_actual.distancia_total
+                            distancia_total_real
                         )
                         
                         if not validacion['valido']:
@@ -1082,10 +1084,10 @@ def mostrar_resumen_metricas(gestor):
                             }
                         )
                         
-                        # 9. Mostrar métricas resumen
+                        # 9. Mostrar métricas resumen (usando distancia real del gestor)
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("Distancia Total", f"{total_dist_instrucciones:.2f} km")
+                            st.metric("Distancia Total", f"{distancia_total_real:.2f} km")
                         with col2:
                             st.metric("Total de Pasos", len(instrucciones))
                         with col3:

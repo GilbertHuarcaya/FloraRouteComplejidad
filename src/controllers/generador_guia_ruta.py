@@ -92,7 +92,7 @@ class GeneradorGuiaRuta:
             
             # 2. Calcular direccion (solo si hay nodo previo para comparar)
             if i == 0:
-                direccion = "🚀 Salida"
+                direccion = "Salida"
                 logger.debug(f"Paso {i+1}: Salida desde nodo {nodo_actual}")
             else:
                 nodo_anterior = secuencia_nodos[i - 1]
