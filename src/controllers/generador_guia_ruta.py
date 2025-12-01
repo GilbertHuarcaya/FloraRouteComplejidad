@@ -339,7 +339,7 @@ class GeneradorGuiaRuta:
             if tipo_destino == "destino":
                 inst.instruccion += " 📦 [ENTREGA]"
             elif tipo_destino == "vivero":
-                inst.instruccion += " 🏪 [REABASTECIMIENTO]"
+                inst.instruccion += " [REABASTECIMIENTO]"
         
         return instrucciones
     
