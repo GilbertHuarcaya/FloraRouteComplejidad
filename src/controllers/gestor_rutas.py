@@ -36,6 +36,8 @@ class GestorRutas:
         
         self.contador_destinos = 0
         self.contador_rutas = 0
+        self.viveros_suplentes: List[int] = []  # viveros adicionales para reabastecimiento
+        self.viveros_seleccionados_ids: List[int] = []  # viveros que el usuario seleccionó como orígenes
     
     def registrar_vivero(self, vivero: Vivero) -> bool:
         """
@@ -47,9 +49,7 @@ class GestorRutas:
         Returns:
             True si se registro exitosamente
         """
-        if not vivero.validar_en_grafo(self.grafo):
-            return False
-        
+        # Allow registration even if nodo_id not yet in grafo (nodo_id may be -1 until associated)
         self.viveros[vivero.vivero_id] = vivero
         return True
     
@@ -90,8 +90,9 @@ class GestorRutas:
         Returns:
             Tupla (exito, mensaje_error)
         """
-        if self.pedido_actual is None:
-            return False, "Debe seleccionar un vivero primero"
+        # Requerir que exista un vivero activo (origen) para definir el inicio del recorrido
+        if self.vivero_actual is None:
+            return False, "Debe seleccionar y confirmar un vivero activo como origen antes de agregar destinos"
         
         # Validar coordenadas
         valido, error = self.validador.validar_rango_geografico_lima(lat, lon)
@@ -104,14 +105,49 @@ class GestorRutas:
         if not valido:
             return False, error
         
-        # Validar stock disponible
-        if self.vivero_actual:
-            valido, error = self.validador.validar_stock_flores(
-                self.vivero_actual.inventario.stock,
-                flores_requeridas
-            )
-            if not valido:
-                return False, error
+        # Construir lista de proveedores ordenada: origen activo primero, luego los seleccionados (sin duplicados)
+        supplier_ids = [self.vivero_actual.vivero_id]
+        for vid in self.viveros_seleccionados_ids:
+            if vid != self.vivero_actual.vivero_id and vid in self.viveros:
+                supplier_ids.append(vid)
+
+        # Verificar capacidad agregada (suma de capacidades de los viveros seleccionados)
+        capacidad_total = 0
+        for vid in supplier_ids:
+            v = self.viveros.get(vid)
+            if v and isinstance(v.capacidad_entrega, int):
+                capacidad_total += v.capacidad_entrega
+
+        valido, error = self.validador.validar_capacidad_entrega(
+            self.pedido_actual.cantidad_destinos() + 1,
+            capacidad_total
+        )
+        if not valido:
+            return False, error
+
+        # Validar stock acumulado para TODOS los destinos (existentes + nuevo)
+        # Calcular demanda total por tipo de flor incluyendo el nuevo destino
+        demanda_total = {}
+        for d in self.pedido_actual.destinos:
+            for flor, cant in d.flores_requeridas.items():
+                demanda_total[flor] = demanda_total.get(flor, 0) + int(cant)
+        for flor, cant in flores_requeridas.items():
+            demanda_total[flor] = demanda_total.get(flor, 0) + int(cant)
+
+        # Calcular stock acumulado en el orden de visita previsto (origen primero)
+        stock_acumulado = {}
+        for vid in supplier_ids:
+            v = self.viveros.get(vid)
+            if not v:
+                continue
+            for flor, cant in v.inventario.stock.items():
+                stock_acumulado[flor] = stock_acumulado.get(flor, 0) + max(0, int(cant))
+
+        # Validar que para cada tipo de flor la suma acumulada sea >= demanda total
+        for flor, req_total in demanda_total.items():
+            disponible = stock_acumulado.get(flor, 0)
+            if disponible < req_total:
+                return False, f"Stock insuficiente de {flor}: disponible={disponible}, requerido={req_total}.\nAsegure selección de viveros suplementarios que sumen el stock necesario y confirme el origen activo."
         
         # Si no se proporciono nodo_id, buscar el mas cercano
         if nodo_id is None:
@@ -135,8 +171,49 @@ class GestorRutas:
         # Agregar al pedido
         if not self.pedido_actual.agregar_destino(destino):
             return False, "No se pudo agregar el destino"
-        
-        # Recalcular ruta automaticamente
+
+        # Asignar la entrega a un vivero concreto dentro de supplier_ids
+        # Preferir el vivero activo si esta en la lista y tiene capacidad>0
+        delivering_vid = None
+        if self.vivero_actual and self.vivero_actual.vivero_id in supplier_ids and self.vivero_actual.capacidad_entrega > 0:
+            delivering_vid = self.vivero_actual.vivero_id
+        else:
+            for vid in supplier_ids:
+                v = self.viveros.get(vid)
+                if v and v.capacidad_entrega > 0:
+                    delivering_vid = vid
+                    break
+
+        # Reducir stock repartido entre viveros (greedy)
+        remaining = flores_requeridas.copy()
+        for vid in supplier_ids:
+            if not remaining:
+                break
+            v = self.viveros.get(vid)
+            if not v:
+                continue
+            take = {}
+            for flor, need in list(remaining.items()):
+                have = v.inventario.obtener_stock(flor)
+                if have <= 0:
+                    continue
+                used = min(have, need)
+                if used > 0:
+                    take[flor] = used
+                    remaining[flor] = remaining[flor] - used
+                    if remaining[flor] <= 0:
+                        del remaining[flor]
+            if take:
+                v.inventario.reducir_stock(take)
+
+        # restar 1 a capacidad del vivero que realiza la entrega
+        if delivering_vid:
+            dv = self.viveros.get(delivering_vid)
+            if dv and isinstance(dv.capacidad_entrega, int):
+                dv.capacidad_entrega = max(0, dv.capacidad_entrega - 1)
+
+        # Si el vivero se quedo sin stock de algun tipo, dejar marcado para UI
+        # (la UI puede pedir al usuario seleccionar un vivero suplementario)
         # self._recalcular_ruta_automatico()  # Desactivado: usuario calculará manualmente
         
         return True, None
@@ -223,6 +300,16 @@ class GestorRutas:
         # Extraer nodos
         origen_nodo = self.vivero_actual.nodo_id
         destinos_nodos = [d.nodo_id for d in self.pedido_actual.destinos]
+
+        # Si hay viveros suplentes, priorizarlos al inicio de la lista de nodos
+        if self.viveros_suplentes:
+            suplentes_nodos = []
+            for vid in self.viveros_suplentes:
+                v = self.viveros.get(vid)
+                if v:
+                    suplentes_nodos.append(v.nodo_id)
+            # Prepend suplente nodes so la ruta pase por ellos primero
+            destinos_nodos = suplentes_nodos + destinos_nodos
         
         # Precalcular matriz de distancias
         nodos_interes = [origen_nodo] + destinos_nodos
@@ -348,6 +435,34 @@ class GestorRutas:
             }
             for v in self.viveros.values()
         ]
+
+    def set_viveros_seleccionados(self, ids: List[int]) -> None:
+        """Actualiza la lista de viveros seleccionados por el usuario"""
+        self.viveros_seleccionados_ids = [vid for vid in ids if vid in self.viveros]
+
+    def obtener_viveros_agotados(self) -> List[int]:
+        """Retorna lista de IDs de viveros que tienen algun stock agotado"""
+        agotados = []
+        for vid, v in self.viveros.items():
+            try:
+                if v.inventario and v.inventario.esta_agotado():
+                    agotados.append(vid)
+            except Exception:
+                continue
+        return agotados
+
+    def agregar_vivero_suplementario(self, vivero_id: int) -> Tuple[bool, Optional[str]]:
+        """Agrega un vivero suplementario para reabastecimiento de ruta
+
+        No crea un nuevo pedido; solo marca el vivero para ser visitado
+        durante el calculo de la ruta (priorizado al inicio).
+        """
+        if vivero_id not in self.viveros:
+            return False, f"El vivero {vivero_id} no existe"
+        if vivero_id in self.viveros_suplentes:
+            return True, None
+        self.viveros_suplentes.append(vivero_id)
+        return True, None
     
     def obtener_destinos_actuales(self) -> List[Dict]:
         """Retorna lista de destinos del pedido actual"""

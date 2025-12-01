@@ -246,6 +246,12 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     st.session_state['multiselect_viveros'] = ms
                     st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(nuevo_id)]))
 
+                    # sincronizar seleccion con gestor
+                    try:
+                        gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
+                    except Exception:
+                        pass
+
                     try:
                         existing_df = st.session_state.get('viveros_df')
                         if existing_df is not None:
@@ -282,6 +288,11 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
 
         # Actualizar ids seleccionados en session_state
         st.session_state.viveros_seleccionados_ids = [opciones_viveros[d] for d in seleccion_display]
+        # Sincronizar con el gestor para que la validacion use los viveros actuales
+        try:
+            gestor.set_viveros_seleccionados(st.session_state.viveros_seleccionados_ids)
+        except Exception:
+            pass
 
         # Selectbox para elegir cuál de los seleccionados será el origen activo
         if seleccion_display:
@@ -310,13 +321,62 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     st.sidebar.error(f"Error: {error}")
         else:
             st.sidebar.info("Selecciona al menos un vivero para definir un origen activo")
+
+    # Si algun vivero seleccionado esta agotado, avisar y permitir agregar un suplementario
+    try:
+        agotados = gestor.obtener_viveros_agotados()
+    except Exception:
+        agotados = []
+
+    # intersectar con seleccionados
+    seleccionados_ids = list(st.session_state.get('viveros_seleccionados_ids', []))
+    agotados_seleccionados = [vid for vid in seleccionados_ids if vid in agotados]
+    if agotados_seleccionados:
+        nombres_agotados = []
+        opciones_suplentes = {}
+        for _, row in viveros_df.iterrows():
+            vid = int(row['vivero_id'])
+            display = f"{row['nombre']} (ID: {vid})"
+            if vid in agotados_seleccionados:
+                nombres_agotados.append(display)
+            # preparar opciones para suplentes (no agotados)
+            if vid not in agotados:
+                opciones_suplentes[display] = vid
+
+        st.sidebar.warning(f"El/Los vivero(s) agotados: {', '.join(nombres_agotados)}. Seleccione un vivero suplementario para completar los pedidos.")
+
+        if opciones_suplentes:
+            seleccion_suplente_display = st.sidebar.selectbox("Elegir vivero suplementario:", options=list(opciones_suplentes.keys()), key="select_suplente")
+            if st.sidebar.button("Agregar vivero suplementario", key="btn_agregar_suplente"):
+                suplente_id = opciones_suplentes.get(seleccion_suplente_display)
+                if suplente_id:
+                    exito, err = gestor.agregar_vivero_suplementario(suplente_id)
+                    if exito:
+                        # asegurar aparece en multiselect
+                        ms = list(st.session_state.get('multiselect_viveros', []))
+                        if seleccion_suplente_display not in ms:
+                            ms.append(seleccion_suplente_display)
+                            st.session_state['multiselect_viveros'] = ms
+                        st.session_state['viveros_seleccionados_ids'] = list(set(st.session_state.get('viveros_seleccionados_ids', []) + [int(suplente_id)]))
+
+                        # sincronizar seleccion con gestor
+                        try:
+                            gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
+                        except Exception:
+                            pass
+                        st.sidebar.success("Vivero suplementario agregado. La ruta priorizara su visita al calcularla.")
+                        st.rerun()
+                    else:
+                        st.sidebar.error(f"Error: {err}")
+        else:
+            st.sidebar.error("No hay viveros disponibles como suplentes. Por favor cree o habilite otro vivero.")
     
     st.sidebar.divider()
     # Seccion 2: Agregar destinos (RF-02)
     st.sidebar.subheader("2. Agregar Destinos")
     
-    if st.session_state.vivero_seleccionado is None:
-        st.sidebar.info("Primero selecciona un vivero")
+    if (st.session_state.vivero_seleccionado is None) and (not st.session_state.viveros_seleccionados_ids):
+        st.sidebar.info("Primero selecciona al menos un vivero origen (o confirma un origen activo)")
     else:
         # Contador de destinos
         num_destinos = len(st.session_state.destinos)
@@ -455,8 +515,19 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
         display = f"{vivero['nombre']} (ID: {vid})"
         is_selected = vid in st.session_state.viveros_seleccionados_ids
         is_activo = (st.session_state.vivero_origen_activo == vid)
-        # Estilo segun estado
-        if is_activo:
+
+        # obtener objeto Vivero del gestor si esta disponible para leer inventario/capacidad
+        vivero_obj = None
+        try:
+            if hasattr(gestor, 'viveros') and int(vid) in gestor.viveros:
+                vivero_obj = gestor.viveros[int(vid)]
+        except Exception:
+            vivero_obj = None
+
+        # Estilo segun estado: agotado -> rojo, activo -> darkgreen, seleccionado -> green, default -> blue
+        if vivero_obj is not None and hasattr(vivero_obj, 'esta_agotado') and vivero_obj.esta_agotado():
+            icon = folium.Icon(color='red', icon='home', prefix='fa')
+        elif is_activo:
             icon = folium.Icon(color='darkgreen', icon='home', prefix='fa')
         elif is_selected:
             icon = folium.Icon(color='green', icon='home', prefix='fa')
@@ -469,9 +540,17 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
         except Exception:
             nodo_asociado = vivero.get('nodo_id') if 'vivero' in locals() else vid
 
+        # Construir popup con informacion de capacidad e inventario si disponemos del objeto
+        if vivero_obj is not None:
+            inv = vivero_obj.inventario.stock
+            inv_str = "<br>".join([f"{k}: {v}" for k, v in inv.items()])
+            popup_html = f"<b>{vivero['nombre']}</b><br>ID: {vid}<br>Nodo asociado: {nodo_asociado}<br>Capacidad: {vivero_obj.capacidad_entrega}<br>{inv_str}"
+        else:
+            popup_html = f"<b>{vivero['nombre']}</b><br>ID: {vid}<br>Nodo asociado: {nodo_asociado}<br>Capacidad: {vivero.get('capacidad_entrega', 'N/A')}"
+
         folium.Marker(
             [float(vivero['lat']), float(vivero['lon'])],
-            popup=f"<b>{vivero['nombre']}</b><br>ID: {vid}<br>Nodo asociado: {nodo_asociado}",
+            popup=popup_html,
             tooltip=display,
             icon=icon
         ).add_to(mapa)
@@ -635,6 +714,11 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                     nuevos_ids = [opciones_viveros_local[d] for d in current if d in opciones_viveros_local]
                     if st.session_state.get('viveros_seleccionados_ids') != nuevos_ids:
                         st.session_state.viveros_seleccionados_ids = nuevos_ids
+                        # sincronizar con gestor
+                        try:
+                            gestor.set_viveros_seleccionados(nuevos_ids)
+                        except Exception:
+                            pass
                         need_rerun = True
 
                     if st.session_state.get('vivero_origen_activo') != encontrado:
@@ -655,6 +739,11 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                     # aplicar al gestor (no afecta rerun guard)
                     try:
                         gestor.seleccionar_vivero(encontrado)
+                        # tambien sincronizar seleccionados por si cambiaron
+                        try:
+                            gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
+                        except Exception:
+                            pass
                     except Exception:
                         pass
 

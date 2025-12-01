@@ -26,11 +26,18 @@ class Inventario:
         """Reduce el stock segun lo requerido"""
         for flor, cantidad in flores_requeridas.items():
             if flor in self.stock:
-                self.stock[flor] -= cantidad
+                self.stock[flor] = max(0, self.stock[flor] - cantidad)
     
     def obtener_stock(self, tipo_flor: str) -> int:
         """Retorna stock de un tipo de flor"""
         return self.stock.get(tipo_flor, 0)
+
+    def esta_agotado(self) -> bool:
+        """Retorna True si algun tipo de flor esta agotado (stock == 0)"""
+        for cantidad in self.stock.values():
+            if cantidad <= 0:
+                return True
+        return False
 
 
 class Vivero:
