@@ -151,6 +151,12 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
     
     st.sidebar.header("Control de Rutas")
     st.sidebar.subheader("1. Seleccionar Vivero Origen")
+    # Opcion: validacion por simulacion (origen -> suplente -> destino)
+    usar_simulacion = st.sidebar.checkbox("Usar validación por simulación (reabastecimiento)", value=False, key="usar_simulacion")
+    try:
+        gestor.set_validacion_por_simulacion(usar_simulacion)
+    except Exception:
+        pass
     # Nota: no escribir keys de widgets en session_state aquí.
     # El formulario de crear vivero leerá `st.session_state.get('mapa_clicked')`
     # localmente para poblar valores por defecto (igual que en agregar destino).
