@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Any
 import math
 import logging
-
+import folium
 
 logger = logging.getLogger(__name__)
 
@@ -443,8 +443,6 @@ class GeneradorGuiaRuta:
             resultado['diferencia'] = diferencia
             resultado['diferencia_porcentaje'] = diferencia_porcentaje
             
-            if diferencia_porcentaje > 5:  # Margen de error: 5%
-                resultado['mensaje'] = f"Diferencia en distancia: {diferencia:.2f} km ({diferencia_porcentaje:.1f}%)"
         
         logger.info(resultado['mensaje'])
         return resultado
@@ -460,16 +458,10 @@ class GeneradorGuiaRuta:
             String con instrucciones formateadas para archivo .txt
         """
         lineas = []
-        lineas.append("=" * 70)
-        lineas.append("GUÍA DE RUTA DETALLADA - FLORAROUTE")
-        lineas.append("=" * 70)
-        lineas.append("")
         
         total_distancia = sum(inst.distancia_km for inst in instrucciones)
         lineas.append(f"Distancia Total: {total_distancia:.2f} km")
         lineas.append(f"Total de Pasos: {len(instrucciones)}")
-        lineas.append("")
-        lineas.append("-" * 70)
         lineas.append("")
         
         for inst in instrucciones:
@@ -480,9 +472,7 @@ class GeneradorGuiaRuta:
             lineas.append(f"  Desde nodo {inst.nodo_origen} → Hacia nodo {inst.nodo_destino}")
             lineas.append("")
         
-        lineas.append("-" * 70)
         lineas.append(f"FIN DE RUTA - Total: {total_distancia:.2f} km")
-        lineas.append("=" * 70)
         
         return "\n".join(lineas)
     
@@ -498,12 +488,7 @@ class GeneradorGuiaRuta:
         Returns:
             Objeto folium.Map con la ruta y marcadores
         """
-        try:
-            import folium
-        except ImportError:
-            logger.error("Folium no instalado. Ejecutar: pip install folium")
-            return None
-        
+
         if not instrucciones:
             logger.warning("No hay instrucciones para visualizar")
             return None

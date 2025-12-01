@@ -5,7 +5,7 @@ FloraRoute - Sistema de Rutas
 
 import streamlit as st
 import folium
-from streamlit_folium import st_folium
+from streamlit_folium import st_folium, folium_static
 import pandas as pd
 import sys
 import os
@@ -13,6 +13,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.controllers.gestor_rutas import GestorRutas
+from src.controllers.generador_guia_ruta import GeneradorGuiaRuta, InstruccionRuta
 from src.models.vivero import Vivero, Inventario
 from src.utils.cargador_datos import (
     cargar_grafo_lima,
@@ -332,9 +333,7 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                 if exito:
                     st.session_state.vivero_seleccionado = vivero_id
                     st.session_state.vivero_origen_activo = vivero_id
-                    # Al cambiar el origen, limpiar destinos locales para evitar desincronía
-                    st.session_state.destinos = []
-                    st.session_state.contador_destinos = 0
+                    # Solo marcar que se recalcule la ruta, NO limpiar destinos
                     st.session_state.ruta_calculada = False
                     st.sidebar.success(f"Origen activo: {origen_display}")
                 else:
@@ -454,20 +453,17 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     error = str(e)
                 
                 if exito:
-                    # Sincronizar con los destinos del gestor (usar los IDs reales del gestor)
-                    destinos_gestor = gestor.obtener_destinos_actuales()
-                    if destinos_gestor:
-                        # Actualizar session_state.destinos con los datos del gestor
-                        st.session_state.destinos = [
-                            {
-                                'id': d['destino_id'],
-                                'lat': d['lat'],
-                                'lon': d['lon'],
-                                'flores': d['flores']
-                            }
-                            for d in destinos_gestor
-                        ]
-                        st.session_state.contador_destinos = max([d['id'] for d in st.session_state.destinos]) if st.session_state.destinos else 0
+                    # NO sincronizar desde el gestor aquí - el gestor ya tiene el destino agregado
+                    # Solo incrementar el contador y agregar a la lista local
+                    st.session_state.contador_destinos += 1
+                    nuevo_destino = {
+                        'id': st.session_state.contador_destinos,
+                        'lat': lat,
+                        'lon': lon,
+                        'flores': flores_req
+                    }
+                    if nuevo_destino not in st.session_state.destinos:
+                        st.session_state.destinos.append(nuevo_destino)
                     st.success("Destino agregado")
                     st.rerun()
                 else:
@@ -477,20 +473,8 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         if st.session_state.destinos:
             st.sidebar.subheader("Destinos agregados:")
             
-            # Sincronizar con el gestor antes de mostrar (para asegurar consistencia)
-            if gestor.pedido_actual:
-                destinos_gestor = gestor.obtener_destinos_actuales()
-                if len(destinos_gestor) != len(st.session_state.destinos):
-                    # Actualizar desde el gestor
-                    st.session_state.destinos = [
-                        {
-                            'id': d['destino_id'],
-                            'lat': d['lat'],
-                            'lon': d['lon'],
-                            'flores': d['flores']
-                        }
-                        for d in destinos_gestor
-                    ]
+            # NO sincronizar automáticamente - mantener los destinos en session_state
+            # La sincronización solo debe ocurrir al eliminar manualmente
             
             for dest in st.session_state.destinos:
                 with st.sidebar.expander(f"Destino {dest['id']}"):
@@ -501,16 +485,10 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     if st.button(f"Eliminar", key=f"btn_eliminar_{dest['id']}"):
                         exito, error = gestor.eliminar_destino(dest['id'])
                         if exito:
-                            # Sincronizar desde el gestor después de eliminar
-                            destinos_gestor = gestor.obtener_destinos_actuales()
+                            # Eliminar de la lista local en session_state
                             st.session_state.destinos = [
-                                {
-                                    'id': d['destino_id'],
-                                    'lat': d['lat'],
-                                    'lon': d['lon'],
-                                    'flores': d['flores']
-                                }
-                                for d in destinos_gestor
+                                d for d in st.session_state.destinos 
+                                if d['id'] != dest['id']
                             ]
                             st.rerun()
                         else:
@@ -531,7 +509,7 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
         
         # Checkbox de validación por simulación (reabastecimiento)
         usar_simulacion = st.sidebar.checkbox(
-            "🔄 Calcular con reabastecimiento",
+            "Calcular con reabastecimiento",
             value=False,
             key="usar_simulacion",
             help="Si está marcado, calcula una ruta que incluye paradas en viveros adicionales para reabastecer según sea necesario"
@@ -592,9 +570,9 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                     if exito:
                         st.session_state.ruta_calculada = True
                         if usar_simulacion:
-                            st.sidebar.success("✅ Ruta con reabastecimiento calculada exitosamente")
+                            st.sidebar.success(" Ruta con reabastecimiento calculada exitosamente")
                         else:
-                            st.sidebar.success("✅ Ruta calculada exitosamente")
+                            st.sidebar.success(" Ruta calculada exitosamente")
                     else:
                         st.sidebar.error(f"Error: {error}")
     else:
@@ -686,7 +664,7 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
         
         # Mostrar información de reabastecimiento si hay simulación activa
         if hasattr(gestor, 'asignaciones_reabastecimiento') and gestor.asignaciones_reabastecimiento:
-            st.write("### 🔄 Reabastecimiento Activo")
+            st.write("### Reabastecimiento Activo")
             viveros_usados = set()
             for destino_id, suppliers in gestor.asignaciones_reabastecimiento.items():
                 viveros_usados.update(suppliers.keys())
@@ -810,7 +788,7 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                                 fill=True,
                                 fillColor='lightblue',
                                 fillOpacity=0.8,
-                                tooltip=f"🔄 Reabastecimiento {i}: {viveros_dict.get(nodo_id, f'nodo {nodo_id}')}"
+                                tooltip=f"Reabastecimiento {i}: {viveros_dict.get(nodo_id, f'nodo {nodo_id}')}"
                             ).add_to(mapa)
                         else:
                             # Destino de entrega
@@ -821,7 +799,7 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                                 fill=True,
                                 fillColor='red',
                                 fillOpacity=0.9,
-                                tooltip=f"📦 Entrega {i} (nodo {nodo_id})"
+                                tooltip=f"Entrega {i} (nodo {nodo_id})"
                             ).add_to(mapa)
                 
                 # Agregar leyenda al mapa cuando hay ruta con reabastecimiento
@@ -833,8 +811,8 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                                 border:2px solid grey; border-radius: 5px; padding: 10px">
                     <p style="margin: 0; font-weight: bold; text-align: center;">Leyenda de Ruta</p>
                     <p style="margin: 5px 0;"><span style="color: lightgreen; font-size: 20px;">●</span> Origen inicial</p>
-                    <p style="margin: 5px 0;"><span style="color: lightblue; font-size: 20px;">●</span> 🔄 Reabastecimiento</p>
-                    <p style="margin: 5px 0;"><span style="color: red; font-size: 20px;">●</span> 📦 Entrega a destino</p>
+                    <p style="margin: 5px 0;"><span style="color: lightblue; font-size: 20px;">●</span> Reabastecimiento</p>
+                    <p style="margin: 5px 0;"><span style="color: red; font-size: 20px;">●</span> Entrega a destino</p>
                     <p style="margin: 5px 0;"><span style="color: orange; font-size: 20px;">●</span> Retorno al origen</p>
                     </div>
                     '''
@@ -949,9 +927,7 @@ def mostrar_mapa(gestor, viveros_df, nodos_coords):
                             gestor.set_viveros_seleccionados(st.session_state.get('viveros_seleccionados_ids', []))
                         except Exception:
                             pass
-                        # limpiar destinos en la UI para evitar desincronía con el pedido del gestor
-                        st.session_state.destinos = []
-                        st.session_state.contador_destinos = 0
+                        # Solo marcar que se recalcule la ruta, NO limpiar destinos
                         st.session_state.ruta_calculada = False
                     except Exception:
                         pass
@@ -1001,6 +977,158 @@ def mostrar_resumen_metricas(gestor):
         if orden_visitas:
             df_orden = pd.DataFrame(orden_visitas)
             st.dataframe(df_orden, use_container_width=True)
+        
+        # ===== GUÍA DE RUTA DETALLADA =====
+        st.markdown("---")
+        st.subheader("📋 Guía de Ruta Detallada")
+        st.markdown("**Instrucciones paso a paso para el conductor**")
+        
+        try:
+            # 1. Obtener grafo y coordenadas (ya cargados en cache)
+            grafo, nodos_coords = cargar_datos_iniciales()[:2]
+            
+            if not grafo or not nodos_coords:
+                st.warning("⚠️ No se pudo cargar el grafo de Lima. Guía de ruta no disponible.")
+            else:
+                # 2. Crear generador
+                generador = GeneradorGuiaRuta(grafo, nodos_coords)
+                
+                # 3. Obtener secuencia completa de nodos desde ruta
+                if gestor.ruta_actual and gestor.ruta_actual.camino_completo:
+                    secuencia_nodos = gestor.ruta_actual.camino_completo
+                    
+                    # 4. Identificar waypoints (destinos y viveros de reabastecimiento)
+                    waypoints = {}
+                    
+                    # Marcar destinos
+                    for destino in gestor.pedido_actual.destinos:
+                        waypoints[destino.nodo_id] = f"📦 Destino {destino.destino_id}"
+                    
+                    # Marcar viveros de reabastecimiento (si existen)
+                    if hasattr(gestor, 'asignaciones_reabastecimiento') and gestor.asignaciones_reabastecimiento:
+                        viveros_reabast = set()
+                        for dest_id, suppliers in gestor.asignaciones_reabastecimiento.items():
+                            viveros_reabast.update(suppliers.keys())
+                        
+                        # Excluir vivero origen
+                        viveros_reabast.discard(gestor.vivero_actual.vivero_id)
+                        
+                        for vivero_id in viveros_reabast:
+                            vivero = gestor.viveros.get(vivero_id)
+                            if vivero:
+                                waypoints[vivero.nodo_id] = f"🏪 Reabastecimiento: {vivero.nombre}"
+                    
+                    # Marcar origen y retorno
+                    if gestor.vivero_actual:
+                        nodo_origen = gestor.vivero_actual.nodo_id
+                        if secuencia_nodos[0] == nodo_origen:
+                            waypoints[nodo_origen] = f"🚀 Origen: {gestor.vivero_actual.nombre}"
+                        # Si la ruta retorna al origen, marcar último nodo
+                        if len(secuencia_nodos) > 1 and secuencia_nodos[-1] == nodo_origen:
+                            # No sobrescribir - ya está marcado como origen
+                            pass
+                    
+                    # 5. Generar instrucciones
+                    instrucciones = generador.generar_guia(secuencia_nodos)
+                    
+                    # 6. Enriquecer instrucciones con información de waypoints
+                    for inst in instrucciones:
+                        if inst.nodo_destino in waypoints:
+                            nombre_waypoint = waypoints[inst.nodo_destino]
+                            # Agregar información al final de la instrucción
+                            inst.instruccion = f"{inst.instruccion} → {nombre_waypoint}"
+                    
+                    if not instrucciones:
+                        st.info("ℹNo se pudieron generar instrucciones para esta ruta")
+                    else:
+                        # 7. Validar consistencia
+                        total_dist_instrucciones = sum(inst.distancia_km for inst in instrucciones)
+                        validacion = generador.validar_instrucciones(
+                            instrucciones, 
+                            gestor.ruta_actual.distancia_total
+                        )
+                        
+                        if not validacion['valido']:
+                            st.warning(f"Advertencia: {validacion['mensaje']}")
+                        elif 'diferencia_porcentaje' in validacion and validacion['diferencia_porcentaje'] > 5:
+                            st.warning(f"{validacion['mensaje']}")
+                        
+                        # 8. Mostrar tabla con pandas DataFrame
+                        datos_guia = []
+                        for inst in instrucciones:
+                            datos_guia.append({
+                                'Paso': inst.paso,
+                                'Dirección': inst.direccion,
+                                'Instrucción': inst.instruccion,
+                                'Distancia': f"{inst.distancia_km:.2f} km",
+                                'Desde Nodo': inst.nodo_origen,
+                                'Hacia Nodo': inst.nodo_destino
+                            })
+                        
+                        df_guia = pd.DataFrame(datos_guia)
+                        
+                        # Mostrar tabla con estilo
+                        st.dataframe(
+                            df_guia,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                'Paso': st.column_config.NumberColumn('Paso', width='small'),
+                                'Dirección': st.column_config.TextColumn('Dirección', width='small'),
+                                'Instrucción': st.column_config.TextColumn('Instrucción', width='large'),
+                                'Distancia': st.column_config.TextColumn('Distancia', width='small'),
+                                'Desde Nodo': st.column_config.NumberColumn('Desde', width='small'),
+                                'Hacia Nodo': st.column_config.NumberColumn('Hacia', width='small')
+                            }
+                        )
+                        
+                        # 9. Mostrar métricas resumen
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Distancia Total", f"{total_dist_instrucciones:.2f} km")
+                        with col2:
+                            st.metric("Total de Pasos", len(instrucciones))
+                        with col3:
+                            giros = len([i for i in instrucciones if '→' in i.direccion or '←' in i.direccion])
+                            st.metric("Giros", giros)
+                        
+                        # 10. Opción de descargar instrucciones
+                        instrucciones_texto = generador.exportar_instrucciones_texto(instrucciones)
+                        pedido_id = gestor.pedido_actual.pedido_id if gestor.pedido_actual else "ruta"
+                        st.download_button(
+                            label="Descargar Instrucciones (TXT)",
+                            data=instrucciones_texto,
+                            file_name=f"guia_ruta_{pedido_id}.txt",
+                            mime="text/plain",
+                            key="download_instrucciones"
+                        )
+                        
+                        # 11. Visualización en mapa (opcional)
+                        with st.expander("Ver Mapa Interactivo con Instrucciones", expanded=False):
+                            # Calcular centro del mapa (promedio de coordenadas)
+                            lat_coords = [inst.lat_origen for inst in instrucciones] + [instrucciones[-1].lat_destino]
+                            lon_coords = [inst.lon_origen for inst in instrucciones] + [instrucciones[-1].lon_destino]
+                            lat_centro = sum(lat_coords) / len(lat_coords)
+                            lon_centro = sum(lon_coords) / len(lon_coords)
+                            
+                            mapa_instrucciones = generador.visualizar_en_mapa(
+                                instrucciones, 
+                                center=(lat_centro, lon_centro)
+                            )
+                            
+                            if mapa_instrucciones:
+                                folium_static(mapa_instrucciones, width=1200, height=500)
+                            else:
+                                st.error("No se pudo generar el mapa de instrucciones")
+                
+                else:
+                    st.info("ℹNo hay ruta calculada con camino completo")
+        
+        except Exception as e:
+            st.error(f"❌ Error al generar guía de ruta: {str(e)}")
+            import traceback
+            with st.expander("Ver detalles del error"):
+                st.code(traceback.format_exc())
 
 
 if __name__ == "__main__":

@@ -70,10 +70,15 @@ class GestorRutas:
         
         self.vivero_actual = self.viveros[vivero_id]
         
-        # Crear nuevo pedido
-        pedido_id = len(self.pedidos) + 1
-        self.pedido_actual = Pedido(pedido_id, vivero_id)
-        self.pedidos[pedido_id] = self.pedido_actual
+        # SOLO crear nuevo pedido si NO existe uno activo
+        # Esto permite cambiar el vivero de origen sin perder los destinos agregados
+        if self.pedido_actual is None:
+            pedido_id = len(self.pedidos) + 1
+            self.pedido_actual = Pedido(pedido_id, vivero_id)
+            self.pedidos[pedido_id] = self.pedido_actual
+        else:
+            # Actualizar el vivero de origen del pedido existente
+            self.pedido_actual.vivero_id = vivero_id
         
         return True, None
     
