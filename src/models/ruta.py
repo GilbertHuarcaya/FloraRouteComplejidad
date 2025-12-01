@@ -82,9 +82,15 @@ class Ruta:
                 'es_retorno': es_retorno
             }
             
-            # Agregar metricas del segmento si existe
-            if i < len(self.metricas_segmentos):
-                segmento = self.metricas_segmentos[i]
+            # CORRECCION: Las metricas del segmento [i-1 -> i] deben mostrarse en la fila i
+            # El segmento 0 va de nodo[0] a nodo[1], debe aparecer en fila de nodo[1]
+            if i == 0:
+                # Primer nodo (origen): sin distancia
+                parada['distancia_desde_anterior_km'] = 0.0
+                parada['tiempo_desde_anterior_min'] = 0.0
+            elif i <= len(self.metricas_segmentos):
+                # Para el nodo i, usar el segmento i-1 (que va desde nodo[i-1] hasta nodo[i])
+                segmento = self.metricas_segmentos[i - 1]
                 parada['distancia_desde_anterior_km'] = segmento['distancia_km']
                 parada['tiempo_desde_anterior_min'] = segmento['tiempo_min']
             else:

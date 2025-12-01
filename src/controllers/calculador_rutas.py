@@ -3,8 +3,8 @@ Modulo: calculador_rutas.py
 Descripcion: Algoritmos de optimizacion de rutas para TSP (Traveling Salesman Problem)
 
 TÉCNICAS IMPLEMENTADAS DEL CURSO:
-✅ 1. PROGRAMACIÓN DINÁMICA (Held-Karp) - Líneas 106-202
-✅ 2. TÉCNICAS DE RECORRIDO Y BÚSQUEDA EN GRAFOS (Dijkstra) - Líneas 29-87
+ 1. PROGRAMACIÓN DINÁMICA (Held-Karp) - Líneas 106-202
+ 2. TÉCNICAS DE RECORRIDO Y BÚSQUEDA EN GRAFOS (Dijkstra) - Líneas 29-87
 
 Implementa: Held-Karp (TSP exacto con DP), Dijkstra (Búsqueda en Grafos)
 """
