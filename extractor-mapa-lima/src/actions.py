@@ -33,8 +33,8 @@ def exportar_grafo_graphviz():
     print("\nExportando grafo para Graphviz...")
     print("=" * 50)
     
-    nodes_file = "data/lima_nodes.csv"
-    edges_file = "data/lima_edges.csv"
+    nodes_file = "dataset/lima_nodes.csv"
+    edges_file = "dataset/lima_edges.csv"
     
     if not os.path.exists(nodes_file) or not os.path.exists(edges_file):
         print("Archivos de red no encontrados")
@@ -132,8 +132,8 @@ def crear_mapa_desde_json():
         print("Ejecuta primero la opción 2 (Exportar grafo)")
         return False
     
-    nodes_file = "data/lima_nodes.csv"
-    edges_file = "data/lima_edges.csv"
+    nodes_file = "dataset/lima_nodes.csv"
+    edges_file = "dataset/lima_edges.csv"
     
     if not os.path.exists(nodes_file):
         print("Archivo de nodos no encontrado")

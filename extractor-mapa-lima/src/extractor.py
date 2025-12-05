@@ -57,12 +57,12 @@ class NetworkExtractor:
             nodes_df, edges_df = self._to_dataframes(G)
             
             # Guardar archivos
-            nodes_df.to_csv("data/lima_nodes.csv", index=False)
-            edges_df.to_csv("data/lima_edges.csv", index=False)
+            nodes_df.to_csv("dataset/lima_nodes.csv", index=False)
+            edges_df.to_csv("dataset/lima_edges.csv", index=False)
             
             print(f"Archivos guardados:")
-            print(f"  data/lima_nodes.csv ({len(nodes_df)} nodos)")
-            print(f"  data/lima_edges.csv ({len(edges_df)} aristas)")
+            print(f"  dataset/lima_nodes.csv ({len(nodes_df)} nodos)")
+            print(f"  dataset/lima_edges.csv ({len(edges_df)} aristas)")
             
             return True
             
