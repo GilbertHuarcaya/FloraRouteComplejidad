@@ -490,10 +490,13 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                         'id': st.session_state.contador_destinos,
                         'lat': lat,
                         'lon': lon,
-                        'flores': flores_req
+                        'flores': flores_req,
+                        'nodo_id': nodo_cercano  # Agregar nodo_id para el mapa
                     }
                     if nuevo_destino not in st.session_state.destinos:
                         st.session_state.destinos.append(nuevo_destino)
+                    # Marcar ruta como no calculada para limpiar ruta anterior del mapa
+                    st.session_state.ruta_calculada = False
                     st.success("Destino agregado")
                     st.rerun()
                 else:
@@ -520,6 +523,8 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
                                 d for d in st.session_state.destinos 
                                 if d['id'] != dest['id']
                             ]
+                            # Marcar ruta como no calculada para limpiar ruta del mapa
+                            st.session_state.ruta_calculada = False
                             st.rerun()
                         else:
                             st.error(error)
