@@ -64,7 +64,7 @@ def cargar_grafo_lima() -> Tuple[Dict[int, Dict[int, float]], Dict[int, Tuple[fl
 
 def cargar_viveros() -> pd.DataFrame:
     """Carga inventario de viveros desde CSV"""
-    ruta = 'src/data/viveros.csv'
+    ruta = 'dataset/viveros.csv'
     if not os.path.exists(ruta):
         raise FileNotFoundError(f"No encontrado: {ruta}")
     return pd.read_csv(ruta)

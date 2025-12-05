@@ -215,7 +215,7 @@ def mostrar_panel_control(gestor, viveros_df, nodos_coords, grafo):
             submitted = st.form_submit_button("Guardar vivero")
             if submitted:
                 try:
-                    csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'viveros.csv'))
+                    csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'dataset', 'viveros.csv'))
                     df_exist = pd.read_csv(csv_path)
                     if 'vivero_id' in df_exist.columns and not df_exist.empty:
                         nuevo_id = int(df_exist['vivero_id'].max()) + 1
