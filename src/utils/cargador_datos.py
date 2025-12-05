@@ -58,7 +58,6 @@ def cargar_grafo_lima() -> Tuple[Dict[int, Dict[int, float]], Dict[int, Tuple[fl
             grafo[node1][node2] = distancia
             grafo[node2][node1] = distancia
     
-    print(f"[OK] Grafo: {len(nodos_coords)} nodos, {len(grafo)} con aristas")
     return grafo, nodos_coords
 
 
