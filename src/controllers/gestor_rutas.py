@@ -344,8 +344,9 @@ class GestorRutas:
             if sim_ok and isinstance(sim_res, dict):
                 self.asignaciones_reabastecimiento = sim_res
             else:
-                # Si falla la simulación, no hay asignaciones
-                self.asignaciones_reabastecimiento = None
+                # Si falla la simulación, retornar error
+                error_msg = sim_res if isinstance(sim_res, str) else "No se pudo calcular el reabastecimiento necesario"
+                return False, error_msg
         
         # Si hay asignaciones de reabastecimiento (simulación activa), construir ruta con viveros
         if self.asignaciones_reabastecimiento:
@@ -354,9 +355,11 @@ class GestorRutas:
             for destino_id, suppliers in self.asignaciones_reabastecimiento.items():
                 viveros_reabastecimiento.update(suppliers.keys())
             
-            # Convertir IDs de viveros a nodos
+            # Convertir IDs de viveros a nodos (excluyendo el origen que ya está)
             nodos_viveros_reabast = []
             for vid in viveros_reabastecimiento:
+                if vid == self.vivero_actual.vivero_id:
+                    continue  # El origen no se agrega como punto intermedio
                 v = self.viveros.get(vid)
                 if v:
                     nodo = getattr(v, 'nodo_id', None)
@@ -365,20 +368,44 @@ class GestorRutas:
                     if nodo not in nodos_viveros_reabast and nodo != origen_nodo:
                         nodos_viveros_reabast.append(nodo)
             
-            # Construir lista de nodos a visitar: viveros de reabastecimiento + destinos
-            nodos_a_visitar = nodos_viveros_reabast + destinos_nodos
+            # Construir secuencia de visita basada en el orden de la simulación
+            # La simulación ya determinó el orden óptimo de visita
+            secuencia_completa = [origen_nodo]
+            nodos_visitados = set([origen_nodo])
             
-            # Precalcular matriz de distancias
-            nodos_interes = [origen_nodo] + nodos_a_visitar
-            self.calculador.precalcular_matriz_distancias(nodos_interes)
+            # Reconstruir orden de la simulación
+            for destino in self.pedido_actual.destinos:
+                # Antes de este destino, verificar si necesitamos visitar un vivero
+                asig_dest = self.asignaciones_reabastecimiento.get(destino.destino_id, {})
+                for vid in asig_dest.keys():
+                    if vid != self.vivero_actual.vivero_id:
+                        v = self.viveros.get(vid)
+                        if v:
+                            nodo_vivero = getattr(v, 'nodo_id', None)
+                            if nodo_vivero is None or nodo_vivero == -1:
+                                nodo_vivero = self._buscar_nodo_cercano(v.lat, v.lon)
+                            if nodo_vivero not in nodos_visitados:
+                                secuencia_completa.append(nodo_vivero)
+                                nodos_visitados.add(nodo_vivero)
+                
+                # Agregar destino
+                nodo_destino = destino.nodo_id if destino.nodo_id is not None else self._buscar_nodo_cercano(destino.lat, destino.lon)
+                if nodo_destino not in nodos_visitados:
+                    secuencia_completa.append(nodo_destino)
+                    nodos_visitados.add(nodo_destino)
             
-            # Calcular ruta TSP incluyendo viveros y destinos
+            # Agregar retorno al origen si es necesario
+            if retornar_origen:
+                secuencia_completa.append(origen_nodo)
+            
+            # Precalcular matriz de distancias para todos los nodos
+            self.calculador.precalcular_matriz_distancias(list(nodos_visitados))
+            
+            # Calcular distancia total del recorrido
             tiempo_inicio = time.time()
-            distancia_total, secuencia = self.calculador.calcular_ruta_tsp(
-                origen_nodo,
-                nodos_a_visitar,
-                retornar_origen
-            )
+            camino_completo, distancia_real = self.calculador.calcular_camino_completo(secuencia_completa)
+            distancia_total = distancia_real
+            secuencia = secuencia_completa
             tiempo_fin = time.time()
         else:
             # Ruta simple: solo origen y destinos
@@ -392,9 +419,9 @@ class GestorRutas:
                 retornar_origen
             )
             tiempo_fin = time.time()
-        
-        # Calcular camino completo nodo por nodo
-        camino_completo, distancia_real = self.calculador.calcular_camino_completo(secuencia)
+            
+            # Calcular camino completo nodo por nodo
+            camino_completo, distancia_real = self.calculador.calcular_camino_completo(secuencia)
         
         # Crear objeto Ruta
         self.contador_rutas += 1
@@ -514,22 +541,27 @@ class GestorRutas:
         self.validacion_por_simulacion = bool(value)
 
     def _simular_entregas_con_reabastecimiento(self, destinos: List[Destino], supplier_ids: List[int]) -> Tuple[bool, Optional[object]]:
-        """Selecciona suplentes considerando coste de ruta y verifica factibilidad de stock.
+        """Simula entregas secuenciales con reabastecimiento dinamico cuando el stock es insuficiente.
 
-        Enfoque:
-        - Para cada subconjunto de proveedores (subconjunto que incluya el origen), comprobamos
-          si la suma de stock de ese subconjunto cubre la demanda total. Esto es una
-          enumeración por subconjuntos (DP/exhaustiva) que respeta la técnica de
-          Programación Dinámica / Fuerza Bruta permitida en el curso.
-        - Para los subconjuntos factibles calculamos el coste de la ruta que visita los
-          proveedores seleccionados y todos los destinos (usando `CalculadorRutas` para
-          computar distancias y TSP). Elegimos el subconjunto con menor coste.
-        - Finalmente, asignamos las cantidades a cada destino priorizando proveedores
-          cercanos al destino (usando distancias via `CalculadorRutas.dijkstra`).
+        ENFOQUE CORREGIDO (Simulacion Secuencial):
+        - Simula la ruta destino por destino en orden de cercania desde el origen
+        - Antes de cada entrega, verifica si hay stock suficiente
+        - Si no hay stock suficiente, busca el vivero mas cercano con stock disponible
+        - Inserta el vivero de reabastecimiento en la ruta en ese punto
+        - Continua la simulacion desde el vivero de reabastecimiento
+
+        Tecnicas utilizadas:
+        - FUERZA BRUTA: Prueba todos los viveros disponibles para encontrar el mas cercano
+        - BUSQUEDA EN GRAFOS (Dijkstra): Calcula distancias entre nodos para priorizar viveros
+        - GREEDY: Selecciona vivero mas cercano con stock en cada punto de decision
+
+        Args:
+            destinos: Lista de destinos a visitar
+            supplier_ids: Lista de IDs de viveros disponibles (origen + seleccionados)
 
         Retorna:
             (True, asignaciones) donde asignaciones es un dict: {destino_id: {supplier_id: {flor: qty}}}
-            o (False, mensaje_error) si no existe asignación factible.
+            o (False, mensaje_error) si no existe asignacion factible.
         """
         # Mapear cada proveedor a su stock y nodo
         supplier_stocks: Dict[int, Dict[str, int]] = {}
@@ -546,156 +578,103 @@ class GestorRutas:
                 supplier_stocks[vid] = {}
                 supplier_nodes[vid] = -1
 
-        # Demanda total
+        # Crear copia mutable del stock para simulacion
+        stocks_actuales = {sid: dict(supplier_stocks.get(sid, {})) for sid in supplier_ids}
+
+        # Verificar que existe stock total suficiente
         demanda_total: Dict[str, int] = {}
         for d in destinos:
             for f, c in d.flores_requeridas.items():
                 demanda_total[f] = demanda_total.get(f, 0) + int(c)
 
-        # Enumerar subconjuntos de proveedores que incluyan el origen (primer elemento de supplier_ids)
+        stock_total: Dict[str, int] = {}
+        for sid in supplier_ids:
+            for f, c in stocks_actuales.get(sid, {}).items():
+                stock_total[f] = stock_total.get(f, 0) + int(c)
+
+        for flor, demanda in demanda_total.items():
+            if stock_total.get(flor, 0) < demanda:
+                return False, f"Stock total insuficiente para flor '{flor}': disponible={stock_total.get(flor, 0)}, requerido={demanda}"
+
+        # Preparar nodos de destinos
+        destinos_nodos = []
+        for d in destinos:
+            nodo = d.nodo_id if d.nodo_id is not None else self._buscar_nodo_cercano(d.lat, d.lon)
+            destinos_nodos.append((d, nodo))
+
+        # Inicio de simulacion: posicion actual es el origen
         origen_id = supplier_ids[0]
-        candidatos = supplier_ids
-        n = len(candidatos)
+        nodo_actual = supplier_nodes[origen_id]
+        vivero_actual_id = origen_id
 
-        mejor_subconjunto = None
-        mejor_coste = float('inf')
+        # Ordenar destinos por distancia desde origen (GREEDY)
+        destinos_ordenados = []
+        for dest, nodo_dest in destinos_nodos:
+            try:
+                dist, _ = self.calculador.dijkstra(nodo_actual, nodo_dest)
+            except Exception:
+                dist = float('inf')
+            destinos_ordenados.append((dist, dest, nodo_dest))
+        destinos_ordenados.sort()
 
-        # Precomputar nodos de destinos
-        destinos_nodos = [d.nodo_id if d.nodo_id is not None else self._buscar_nodo_cercano(d.lat, d.lon) for d in destinos]
-
-        # Iterar por tamaños de subconjunto (pruning por tamaño)
-        for r in range(1, n + 1):
-            for comb in combinations(candidatos, r):
-                if origen_id not in comb:
-                    continue
-                # sumar stock del subconjunto
-                disponible: Dict[str, int] = {}
-                for sid in comb:
-                    for f, c in supplier_stocks.get(sid, {}).items():
-                        disponible[f] = disponible.get(f, 0) + int(c)
-                
-                ok = True
-                for f, req in demanda_total.items():
-                    if disponible.get(f, 0) < req:
-                        ok = False
-                        break
-                if not ok:
-                    continue
-
-                # calcular coste de la ruta que visita proveedores (nodos) y destinos
-                proveedor_nodos = [supplier_nodes[sid] for sid in comb]
-                # armar lista de nodos de interes: origen + proveedores + destinos
-                nodos_interes = [supplier_nodes[origen_id]] + [n for n in proveedor_nodos if n != supplier_nodes[origen_id]] + destinos_nodos
-
-                def _approx_cost_by_coords(path_nodes: List[int], comb_sids: Tuple[int, ...]) -> float:
-                    # convierte una secuencia de nodos a coordenadas y suma distancias euclidianas
-                    coords = []  # list of (lat, lon)
-                    # origin
-                    # map node id to coords; for provider nodes that are -1, use vivero lat/lon
-                    # build mapping from node ids of providers to their vivero coords
-                    for n in path_nodes:
-                        if n is None or n == -1:
-                            # try to find matching provider by node -1 (use comb order)
-                            # fallback: skip
-                            continue
-                        if n in self.nodos_coords:
-                            coords.append(self.nodos_coords[n])
-                        else:
-                            # last resort: try to find a vivero with this nodo
-                            found = None
-                            for vid, v in self.viveros.items():
-                                if getattr(v, 'nodo_id', None) == n:
-                                    found = (v.lat, v.lon)
-                                    break
-                            if found:
-                                coords.append(found)
-                            else:
-                                # cannot resolve coord, skip
-                                continue
-                    if len(coords) < 2:
-                        return float('inf')
-                    total = 0.0
-                    for i in range(len(coords) - 1):
-                        lat1, lon1 = coords[i]
-                        lat2, lon2 = coords[i + 1]
-                        total += ((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2) ** 0.5
-                    return total
-
-                coste = float('inf')
-                try:
-                    # intentar cálculo exacto con CalculadorRutas
-                    self.calculador.precalcular_matriz_distancias([n for n in nodos_interes if n is not None and n != -1])
-                    _, sec = self.calculador.calcular_ruta_tsp(supplier_nodes[origen_id], [n for n in proveedor_nodos if n is not None and n != -1] + destinos_nodos, retornar_origen=False)
-                    # calcular camino completo y distancia real
-                    _, distancia_real = self.calculador.calcular_camino_completo(sec)
-                    coste = distancia_real
-                except Exception:
-                    # fallback aproximado por coordenadas si faltan nodos en el grafo o falla el solver
-                    # construir path_nodes: origin node, provider nodes, destino nodes
-                    path_nodes = []
-                    # origin
-                    onode = supplier_nodes.get(origen_id, -1)
-                    path_nodes.append(onode)
-                    for sid in comb:
-                        path_nodes.append(supplier_nodes.get(sid, -1))
-                    path_nodes.extend(destinos_nodos)
-                    approx = _approx_cost_by_coords(path_nodes, comb)
-                    if approx == float('inf'):
-                        # no podemos estimar coste; saltar este subconjunto
-                        continue
-                    coste = approx
-
-                if coste < mejor_coste:
-                    mejor_coste = coste
-                    mejor_subconjunto = comb
-
-            # si ya encontramos un subconjunto factible de tamaño r, podemos romper para preferir menor tamaño
-            if mejor_subconjunto is not None:
-                break
-
-        if mejor_subconjunto is None:
-            return False, "No se encontró subconjunto de proveedores que cubra la demanda"
-
-        # Con el mejor subconjunto elegido, asignar stock a destinos priorizando proveedores más cercanos al destino
+        # Resultado: asignaciones y viveros visitados
         asignaciones_resultado: Dict[int, Dict[int, Dict[str, int]]] = {}
-        # construir stocks mutables
-        stocks_mut = {sid: dict(supplier_stocks.get(sid, {})) for sid in mejor_subconjunto}
+        viveros_visitados = [origen_id]
 
-        # Precalcular distancias entre proveedores y destinos para priorizar
-        prov_nodes = {sid: supplier_nodes[sid] for sid in mejor_subconjunto}
-        for dest in destinos:
-            asignaciones_resultado[dest.destino_id] = {}
-            # ordenar proveedores por distancia al destino
-            dist_list = []
-            for sid, nodo in prov_nodes.items():
-                if nodo is None or nodo == -1:
-                    continue
-                try:
-                    dcost, _ = self.calculador.dijkstra(nodo, dest.nodo_id)
-                except Exception:
-                    dcost = float('inf')
-                dist_list.append((dcost, sid))
-            dist_list.sort()
+        # Simular entregas secuenciales
+        for _, dest, nodo_dest in destinos_ordenados:
+            # Verificar si hay stock suficiente en vivero actual para este destino
+            stock_suficiente = True
+            for flor, cantidad in dest.flores_requeridas.items():
+                if stocks_actuales.get(vivero_actual_id, {}).get(flor, 0) < cantidad:
+                    stock_suficiente = False
+                    break
 
-            # asignar por flor
-            for flor, need in dest.flores_requeridas.items():
-                remaining = int(need)
-                for _, sid in dist_list:
-                    avail = stocks_mut.get(sid, {}).get(flor, 0)
-                    if avail <= 0:
+            # Si no hay stock suficiente, buscar vivero mas cercano con stock
+            if not stock_suficiente:
+                mejor_vivero = None
+                mejor_distancia = float('inf')
+
+                # FUERZA BRUTA: Probar todos los viveros disponibles
+                for sid in supplier_ids:
+                    if sid == vivero_actual_id:
+                        continue  # Ya sabemos que no tiene stock suficiente
+
+                    # Verificar si este vivero tiene stock suficiente para el destino
+                    tiene_stock = True
+                    for flor, cantidad in dest.flores_requeridas.items():
+                        if stocks_actuales.get(sid, {}).get(flor, 0) < cantidad:
+                            tiene_stock = False
+                            break
+
+                    if not tiene_stock:
                         continue
-                    take = min(avail, remaining)
-                    if take <= 0:
+
+                    # Calcular distancia desde posicion actual al vivero usando DIJKSTRA
+                    try:
+                        dist, _ = self.calculador.dijkstra(nodo_actual, supplier_nodes[sid])
+                        if dist < mejor_distancia:
+                            mejor_distancia = dist
+                            mejor_vivero = sid
+                    except Exception:
                         continue
-                    asignaciones_resultado[dest.destino_id].setdefault(sid, {})
-                    asignaciones_resultado[dest.destino_id][sid][flor] = asignaciones_resultado[dest.destino_id][sid].get(flor, 0) + take
-                    stocks_mut[sid][flor] = stocks_mut[sid].get(flor, 0) - take
-                    remaining -= take
-                    if remaining <= 0:
-                        break
-                if remaining > 0:
-                    # esto no debería pasar porque el subconjunto cubre la demanda total, pero si ocurre devolvemos fallo
-                    return False, f"Asignación fallida para destino {dest.destino_id}, flor {flor}"
+
+                if mejor_vivero is None:
+                    return False, f"No hay vivero disponible con stock suficiente para destino {dest.destino_id}"
+
+                # Actualizar posicion y vivero actual al vivero de reabastecimiento
+                vivero_actual_id = mejor_vivero
+                nodo_actual = supplier_nodes[mejor_vivero]
+                viveros_visitados.append(mejor_vivero)
+
+            # Realizar entrega desde vivero actual
+            asignaciones_resultado[dest.destino_id] = {vivero_actual_id: {}}
+            for flor, cantidad in dest.flores_requeridas.items():
+                asignaciones_resultado[dest.destino_id][vivero_actual_id][flor] = int(cantidad)
+                stocks_actuales[vivero_actual_id][flor] -= int(cantidad)
+
+            # Actualizar posicion actual al destino recien visitado
+            nodo_actual = nodo_dest
 
         return True, asignaciones_resultado
 
