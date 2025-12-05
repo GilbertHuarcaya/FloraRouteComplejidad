@@ -250,10 +250,6 @@ class GeneradorGuiaRuta:
             
         Returns:
             Bearing en grados [0, 360), donde 0° = Norte, 90° = Este
-            
-        Formula:
-            θ = atan2(sin(Δλ)⋅cos(φ₂), cos(φ₁)⋅sin(φ₂) − sin(φ₁)⋅cos(φ₂)⋅cos(Δλ))
-            donde φ = latitud, λ = longitud
         """
         # Convertir a radianes
         lat1_rad = math.radians(lat1)
@@ -358,11 +354,6 @@ class GeneradorGuiaRuta:
         Returns:
             Distancia en kilometros
             
-        Formula:
-            a = sin²(Δφ/2) + cos(φ₁)⋅cos(φ₂)⋅sin²(Δλ/2)
-            c = 2⋅atan2(√a, √(1−a))
-            d = R⋅c
-            donde R = radio de la Tierra (6371 km)
         """
         R = 6371.0  # Radio de la Tierra en km
         
