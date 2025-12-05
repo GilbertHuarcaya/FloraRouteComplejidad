@@ -78,7 +78,7 @@ class GestorRutas:
             self.pedidos[pedido_id] = self.pedido_actual
         else:
             # Actualizar el vivero de origen del pedido existente
-            self.pedido_actual.vivero_id = vivero_id
+            self.pedido_actual.vivero_origen_id = vivero_id
         
         return True, None
     
